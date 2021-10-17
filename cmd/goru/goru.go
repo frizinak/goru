@@ -54,7 +54,7 @@ func main() {
 	exit(err)
 
 	master := `{{- define "trans" }}  {{ .Translation }}
-{{ if .Info }}  {{ clrRed }} {{- .Info -}} {{ clrReset }}
+{{ if .Info }}  {{ clrRed }} {{- .Info -}} {{ clrPop }}
 {{ end -}}
 {{ if .Example }}  {{ .Example }}
 {{ if .ExampleTranslation }}  {{ .ExampleTranslation}}
@@ -65,9 +65,9 @@ func main() {
 {{- define "gender" -}}{{ genderSymbol . }}{{- end -}}
 
 {{- define "word" -}}
-{{ clrGreen }} {{- word . -}} {{ clrReset }}
+{{ clrGreen }} {{- word . -}} {{ clrPop }}
 {{- if .NounInfo }} {{ template "gender" .NounInfo.Gender }}{{ end }} {{ .WordType -}}
-{{ if .DerivedFrom }} [{{ word .DerivedFrom }}]{{ end }}
+{{ if .DerivedFrom }} [{{ derived . }}]{{ end }}
 {{- range .Translations }}
 {{ template "trans" . }}{{ end }}
 {{- end -}}
@@ -77,21 +77,46 @@ func main() {
 
 	custom := `{{- define "gender" -}}{{ . }}{{- end -}}`
 
-	word := func(w *openrussian.Word) string {
+	_clrs := make(clrs, 0)
+	clrs := &_clrs
+	clrRed := func() clr { return clrs.Get(31) }
+	clrGreen := func() clr { return clrs.Get(32) }
+	clrYellow := func() clr { return clrs.Get(33) }
+	clrBlue := func() clr { return clrs.Get(34) }
+	clrMagenta := func() clr { return clrs.Get(35) }
+	clrCyan := func() clr { return clrs.Get(36) }
+	clrGray := func() clr { return clrs.Get(37) }
+	clrPop := func() clr { return clrs.Pop() }
+
+	word := func(w *openrussian.Word) stringer {
 		if noStress {
-			return w.Word
+			return strStringer(w.Word)
 		}
-		return string(w.Stressed)
+		p := w.Stressed.Parse()
+		if p.Stress == "" {
+			return strStringer(p.Prefix)
+		}
+		return stringList{
+			strStringer(p.Prefix),
+			clrYellow(),
+			strStringer(p.Stress),
+			clrPop(),
+			strStringer(p.Suffix),
+		}
 	}
 
 	masterTpl, err := template.New("tpls").Funcs(template.FuncMap{
-		"derived": func(w *openrussian.Word) string {
+		"derived": func(w *openrussian.Word) stringer {
 			l := dict.DerivedList(w)
-			s := make([]string, len(l))
+			s := make(stringList, len(l)*2)
 			for i := range l {
-				s[i] = word(l[i])
+				s[i*2] = word(l[i])
+				s[i*2+1] = strStringer(" > ")
 			}
-			return strings.Join(s, " > ")
+			if len(s) != 0 {
+				return s[:len(s)-1]
+			}
+			return s
 		},
 		"genderSymbol": func(g openrussian.Gender) string {
 			switch g {
@@ -105,21 +130,19 @@ func main() {
 
 			return "?"
 		},
-		"clrRed":   func() string { return "\033[31m" },
-		"clrGreen": func() string { return "\033[32m" },
-		"clrReset": func() string { return "\033[0m" },
-		"word":     word,
+		"clrRed":     clrRed,
+		"clrGreen":   clrGreen,
+		"clrYellow":  clrYellow,
+		"clrBlue":    clrBlue,
+		"clrMagenta": clrMagenta,
+		"clrCyan":    clrCyan,
+		"clrGray":    clrGray,
+		"clrPop":     clrPop,
+		"word":       word,
 	}).Parse(master)
 	exit(err)
 	tpl, err := masterTpl.Parse(custom)
 	exit(err)
 	results := d.Search(query, all, int(maxResults))
 	exit(tpl.Execute(os.Stdout, results))
-	// for _, r := range results {
-	// 	//exit(tpls.ExecuteTemplate(os.Stdout, "word", r))
-	// 	exit(tpls.Execute(os.Stdout, r))
-	// 	//fmt.Println(r.StringWithTranslations(true, true))
-	// 	fmt.Println()
-	// }
-
 }

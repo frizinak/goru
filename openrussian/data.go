@@ -8,6 +8,54 @@ import (
 type ID uint64
 type Stressed string
 
+type StressInfo struct {
+	Prefix, Stress, Suffix string
+}
+
+func (s StressInfo) String() string {
+	if s.Stress == "" {
+		return s.Prefix
+	}
+	d := []string{
+		s.Prefix,
+		s.Stress,
+		string(stressMark),
+		s.Suffix,
+	}
+
+	return strings.Join(d, "")
+}
+
+const (
+	stressMark    = '\u0301'
+	stressMarkAlt = '\u0027'
+)
+
+func (s Stressed) Parse() StressInfo {
+	found := false
+	pref := make([]rune, 0, len(s))
+	var stress rune
+	suff := make([]rune, 0, len(s))
+	for i, c := range s {
+		if !found && (c == stressMark || c == stressMarkAlt) {
+			if i == 0 {
+				continue
+			}
+			found = true
+			stress = pref[len(pref)-1]
+			pref = pref[:len(pref)-1]
+			continue
+		}
+		if !found {
+			pref = append(pref, c)
+			continue
+		}
+		suff = append(suff, c)
+	}
+
+	return StressInfo{string(pref), string(stress), string(suff)}
+}
+
 type Gender uint8
 
 func (g Gender) String() string { return someGendersRev[g] }

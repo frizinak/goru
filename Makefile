@@ -15,6 +15,11 @@ CSVZIP = temp/openrussian.zip
 dist/goru: $(FILES) bound/bound.go
 	go build -o "$@" ./cmd/goru
 
+.PHONY: install
+install: $(FILES) bound/bound.go
+	go install ./cmd/goru
+
+
 dist/bindata: $(BINDATA_FILES)
 	go build -o "$@" ./cmd/bindata
 
@@ -34,7 +39,7 @@ $(CSVS):
 
 .PHONY: clean
 clean:
-	rm -rf data
+	rm -f data/go.gob
 	rm -rf temp
 	rm -rf dist
 

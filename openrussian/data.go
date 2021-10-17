@@ -8,6 +8,36 @@ import (
 type ID uint64
 type Stressed string
 
+type Gender uint8
+
+func (g Gender) String() string { return someGendersRev[g] }
+
+const (
+	N Gender = 1 + iota
+	F
+	M
+)
+
+var someGenders = map[string]Gender{
+	"n": N,
+	"f": F,
+	"m": M,
+}
+
+var someGendersRev = map[Gender]string{
+	N: "neuter",
+	F: "female",
+	M: "male",
+}
+
+func gender(s string) Gender {
+	s = strings.ToLower(s)
+	if v, ok := someGenders[s]; ok {
+		return v
+	}
+	return 0
+}
+
 type LanguageLevel uint8
 
 func (l LanguageLevel) String() string { return allLanguageLevelsRev[l] }
@@ -52,7 +82,8 @@ type WordType uint8
 func (w WordType) String() string { return allWordTypesRev[w] }
 
 const (
-	Adjective WordType = 1 + iota
+	Other WordType = iota
+	Adjective
 	Adverb
 	Expression
 	Noun
@@ -60,6 +91,7 @@ const (
 )
 
 var allWordTypes = map[string]WordType{
+	"other":      Other,
 	"adjective":  Adjective,
 	"adverb":     Adverb,
 	"expression": Expression,
@@ -68,6 +100,7 @@ var allWordTypes = map[string]WordType{
 }
 
 var allWordTypesRev = map[WordType]string{
+	Other:      "n/a",
 	Adjective:  "adj.",
 	Adverb:     "adv.",
 	Expression: "expr",
@@ -109,6 +142,23 @@ type CSVTranslation struct {
 	Info               string
 }
 
+type CSVNouns map[ID]CSVNoun
+
+type CSVNoun struct {
+	ID                  ID
+	Gender              Gender
+	SingularOnly        bool
+	PluralOnly          bool
+	DeclinationSingular ID
+	DeclinationPlural   ID
+}
+
+type NounInfo struct {
+	Gender       Gender
+	SingularOnly bool
+	PluralOnly   bool
+}
+
 type Words map[ID]*Word
 
 type Word struct {
@@ -121,6 +171,7 @@ type Word struct {
 	NumberValue   int
 	WordType      WordType
 	LanguageLevel LanguageLevel
+	NounInfo      *NounInfo
 }
 
 func (w *Word) HasTranslation(qry string) (bool, int) {
@@ -142,31 +193,6 @@ func (w *Word) String() string {
 	}
 
 	return fmt.Sprintf("%s %s [%s]", w.Stressed, w.WordType, w.DerivedFrom.Stressed)
-}
-
-func (w *Word) TermString() string {
-	if w.DerivedFrom == nil {
-		return fmt.Sprintf("\033[31m%s\033[0m %s", w.Stressed, w.WordType)
-	}
-
-	return fmt.Sprintf("\033[31m%s\033[0m %s [%s]", w.Stressed, w.WordType, w.DerivedFrom.Stressed)
-}
-
-func (w *Word) StringWithTranslations(term, extra bool) string {
-	d := make([]string, 1, 1+len(w.Translations))
-	d[0] = w.String()
-	if term {
-		d[0] = w.TermString()
-	}
-	for _, t := range w.Translations {
-		trans := t.String()
-		if extra {
-			trans = t.StringExtra()
-		}
-		d = append(d, trans)
-	}
-
-	return strings.Join(d, "\n")
 }
 
 type Translation struct {
@@ -196,19 +222,4 @@ func (t *Translation) HasTranslation(qry string) (bool, int) {
 
 func (t Translation) String() string {
 	return t.Translation
-}
-
-func (t Translation) StringExtra() string {
-	d := make([]string, 1, 4)
-	d[0] = t.Translation
-	if t.Info != "" {
-		d = append(d, "(!) "+t.Info)
-	}
-	if t.Example != "" {
-		d = append(d, "  "+t.Example)
-		if t.ExampleTranslation != "" {
-			d = append(d, "  "+t.ExampleTranslation)
-		}
-	}
-	return strings.Join(d, "\n")
 }

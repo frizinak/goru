@@ -84,6 +84,9 @@ func DecodeWords(r io.Reader) (CSVWords, error) {
 		w.Position = pos
 		w.Word = row[2]
 		w.Stressed = Stressed(row[3])
+		if w.Stressed == "" {
+			w.Stressed = Stressed(w.Word)
+		}
 		w.DerivedFrom = ID(deriv)
 		w.Rank = rank
 		w.Usage = row[8]
@@ -147,9 +150,63 @@ func DecodeTranslations(r io.Reader) (CSVTranslations, error) {
 	return trans, err
 }
 
-func Merge(cw CSVWords, ct CSVTranslations) Words {
+func DecodeNouns(r io.Reader) (CSVNouns, error) {
+	nouns := make(CSVNouns, 10000)
+	err := dec(r, func(n int, row []string) error {
+		if n == 1 {
+			return nil
+		}
+
+		if len(row) != 9 {
+			r := make([]string, 9)
+			copy(r, row)
+			row = r
+		}
+
+		nn := CSVNoun{}
+
+		id, err := parseUint64(row[0], false)
+		if err != nil {
+			return err
+		}
+		declSing, err := parseUint64(row[7], true)
+		if err != nil {
+			return err
+		}
+		declPlur, err := parseUint64(row[8], true)
+		if err != nil {
+			return err
+		}
+
+		nn.ID = ID(id)
+		nn.Gender = gender(row[1])
+		nn.SingularOnly = row[5] == "1"
+		nn.PluralOnly = row[6] == "1"
+		nn.DeclinationSingular = ID(declSing)
+		nn.DeclinationPlural = ID(declPlur)
+
+		if _, ok := nouns[nn.ID]; ok {
+			return fmt.Errorf("duplicate noun on line %d: id: %d", n, nn.ID)
+		}
+		nouns[nn.ID] = nn
+		return nil
+	})
+
+	return nouns, err
+}
+
+func Merge(cw CSVWords, ct CSVTranslations, cn CSVNouns) Words {
 	words := make(Words, len(cw))
 	for i, w := range cw {
+		var noun *NounInfo
+		if n, ok := cn[i]; ok {
+			noun = &NounInfo{
+				Gender:       n.Gender,
+				SingularOnly: n.SingularOnly,
+				PluralOnly:   n.PluralOnly,
+			}
+		}
+
 		words[i] = &Word{
 			ID:            w.ID,
 			Rank:          w.Rank,
@@ -159,6 +216,7 @@ func Merge(cw CSVWords, ct CSVTranslations) Words {
 			NumberValue:   w.NumberValue,
 			WordType:      w.WordType,
 			LanguageLevel: w.LanguageLevel,
+			NounInfo:      noun,
 		}
 	}
 

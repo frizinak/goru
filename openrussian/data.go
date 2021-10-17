@@ -26,8 +26,8 @@ var someGenders = map[string]Gender{
 
 var someGendersRev = map[Gender]string{
 	N: "neuter",
-	F: "female",
-	M: "male",
+	F: "feminine",
+	M: "masculine",
 }
 
 func gender(s string) Gender {

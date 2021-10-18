@@ -9,7 +9,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/frizinak/goru/bound"
+	"github.com/frizinak/goru/data"
 	"github.com/frizinak/goru/dict"
 	"github.com/frizinak/goru/openrussian"
 )
@@ -24,15 +24,12 @@ func exit(err error) {
 }
 
 func getDict() (*dict.Dict, error) {
-	a, err := bound.Asset("db.gob")
-	if err != nil {
-		return nil, err
-	}
-	r := bytes.NewReader(a)
+	r := bytes.NewReader(data.Words)
 	words, err := openrussian.DecodeGOB(r)
 	if err != nil {
 		return nil, err
 	}
+
 	return dict.New(words), nil
 }
 

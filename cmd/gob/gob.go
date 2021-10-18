@@ -42,8 +42,8 @@ func main() {
 		},
 	}
 
-	gob := "data/db.gob"
-	os.Mkdir("data", 0700)
+	gob := "data/data/db.gob"
+	os.MkdirAll("data/data", 0700)
 	for _, d := range x {
 		func() {
 			f, err := os.Open(d.f)

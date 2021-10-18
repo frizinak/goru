@@ -17,7 +17,7 @@ func EncodeGOB(w io.Writer, words Words) error {
 }
 
 func DecodeGOB(r io.Reader) (Words, error) {
-	w := Words{}
+	var w Words
 	return w, gob.NewDecoder(r).Decode(&w)
 }
 

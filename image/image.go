@@ -4,7 +4,7 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/frizinak/goru/bound"
+	"github.com/frizinak/goru/data"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
@@ -41,23 +41,15 @@ func Image(height int, word string) (*image.NRGBA, error) {
 	}
 	fsize := float64((rest / 3))
 	img := image.NewNRGBA(image.Rect(0, 0, 0, 0))
-	cursiveBytes, err := bound.Asset("LobsterRegular-R7AM.otf")
-	if err != nil {
-		return nil, err
-	}
 
 	cursiveSize := fsize
 	printSize := fsize
-	cursive, err := face(cursiveBytes, cursiveSize)
+	cursive, err := face(data.FontLobster, cursiveSize)
 	if err != nil {
 		return nil, err
 	}
 
-	printBytes, err := bound.Asset("open-sans.regular.ttf")
-	if err != nil {
-		return nil, err
-	}
-	print, err := face(printBytes, printSize)
+	print, err := face(data.FontOpenSans, printSize)
 	if err != nil {
 		return nil, err
 	}

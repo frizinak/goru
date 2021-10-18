@@ -90,16 +90,27 @@ func main() {
 			return strStringer(w.Word)
 		}
 		p := w.Stressed.Parse()
-		if p.Stress == "" {
-			return strStringer(p.Prefix)
+		list := make(stringList, 0, 5)
+		space := strStringer(" ")
+		for _, w := range p {
+			if w.Stress == "" {
+				list = append(list, strStringer(w.Prefix), space)
+				continue
+			}
+			list = append(
+				list,
+				strStringer(w.Prefix),
+				clrYellow(),
+				strStringer(w.Stress),
+				clrPop(),
+				strStringer(w.Suffix),
+				space,
+			)
 		}
-		return stringList{
-			strStringer(p.Prefix),
-			clrYellow(),
-			strStringer(p.Stress),
-			clrPop(),
-			strStringer(p.Suffix),
+		if len(list) != 0 && list[len(list)-1] == space {
+			list = list[:len(list)-1]
 		}
+		return list
 	}
 
 	masterTpl, err := template.New("tpls").Funcs(template.FuncMap{
@@ -138,8 +149,16 @@ func main() {
 		"word":       word,
 	}).Parse(master)
 	exit(err)
+
 	tpl, err := masterTpl.Parse(custom)
 	exit(err)
-	results := d.Search(query, all, int(maxResults))
+
+	results, cyrillic := d.Search(query, all, int(maxResults))
+	if len(results) == 0 && cyrillic {
+		results = d.SearchRussianFuzzy(query, all, int(maxResults))
+	}
+	if len(results) == 0 {
+		exit(errors.New("no results"))
+	}
 	exit(tpl.Execute(os.Stdout, results))
 }

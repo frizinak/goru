@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/frizinak/goru/fuzzy"
 	"github.com/frizinak/goru/openrussian"
 )
 
@@ -128,7 +129,7 @@ func (d *Dict) SearchRussian(qry string, includeWithoutTranslation bool, max int
 	return results2words(results, max)
 }
 
-func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) []*openrussian.Word {
+func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) ([]*openrussian.Word, bool) {
 	cyrillic := 0
 	for _, c := range qry {
 		if c >= '\u0400' && c <= '\u04FF' {
@@ -137,8 +138,38 @@ func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) []*op
 	}
 
 	if cyrillic < len(qry)/2 {
-		return d.SearchEnglish(qry, max)
+		return d.SearchEnglish(qry, max), false
 	}
 
-	return d.SearchRussian(qry, includeWithoutTranslation, max)
+	return d.SearchRussian(qry, includeWithoutTranslation, max), true
+}
+
+func (d *Dict) SearchRussianFuzzy(qry string, includeWithoutTranslation bool, max int) []*openrussian.Word {
+	if d.fuzz.index == nil {
+		words := make([]*openrussian.Word, 0, len(d.w))
+		l := make([]string, 0, len(d.w))
+		for _, w := range d.w {
+			words = append(words, w)
+			l = append(l, w.Word)
+		}
+		d.fuzz.words = words
+		d.fuzz.index = fuzzy.NewIndex(2, l)
+	}
+
+	res := d.fuzz.index.Search(qry, func(score, low, high int) bool {
+		return score >= (low+high)/2
+	})
+
+	results := make(Results, 0, len(res))
+	for _, ix := range res {
+		if !includeWithoutTranslation && len(d.fuzz.words[ix].Translations) == 0 {
+			continue
+		}
+		res := &Result{Word: d.fuzz.words[ix]}
+		res.Levenshtein(qry)
+		results = append(results, res)
+	}
+
+	sort.Sort(results)
+	return results2words(results, max)
 }

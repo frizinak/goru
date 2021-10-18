@@ -14,7 +14,7 @@ dist/goru: $(FILES)
 	go build -o "$@" ./cmd/goru
 
 .PHONY: install
-install: $(FILES) bound/bound.go
+install: $(FILES)
 	go install ./cmd/goru
 
 dist/gob: $(GOB_FILES)

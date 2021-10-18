@@ -8,11 +8,11 @@ import (
 type ID uint64
 type Stressed string
 
-type StressInfo struct {
+type Stress struct {
 	Prefix, Stress, Suffix string
 }
 
-func (s StressInfo) String() string {
+func (s Stress) String() string {
 	if s.Stress == "" {
 		return s.Prefix
 	}
@@ -26,16 +26,37 @@ func (s StressInfo) String() string {
 	return strings.Join(d, "")
 }
 
+type StressedSentence []Stress
+
+func (s StressedSentence) String() string {
+	n := make([]string, len(s))
+	for i := range s {
+		n[i] = s[i].String()
+	}
+	return strings.Join(n, " ")
+}
+
 const (
 	stressMark    = '\u0301'
 	stressMarkAlt = '\u0027'
 )
 
-func (s Stressed) Parse() StressInfo {
+func (s Stressed) Parse() StressedSentence {
+	f := strings.Fields(string(s))
+	ss := make(StressedSentence, len(f))
+	for i := range f {
+		ss[i] = Stressed(f[i]).parse()
+	}
+
+	return ss
+}
+
+func (s Stressed) parse() Stress {
 	found := false
 	pref := make([]rune, 0, len(s))
 	var stress rune
 	suff := make([]rune, 0, len(s))
+
 	for i, c := range s {
 		if !found && (c == stressMark || c == stressMarkAlt) {
 			if i == 0 {
@@ -53,7 +74,11 @@ func (s Stressed) Parse() StressInfo {
 		suff = append(suff, c)
 	}
 
-	return StressInfo{string(pref), string(stress), string(suff)}
+	var stressStr string
+	if found {
+		stressStr = string(stress)
+	}
+	return Stress{string(pref), stressStr, string(suff)}
 }
 
 type Gender uint8

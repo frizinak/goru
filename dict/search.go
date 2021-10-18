@@ -111,11 +111,13 @@ func (d *Dict) SearchEnglish(qry string, max int) []*openrussian.Word {
 
 func (d *Dict) SearchRussian(qry string, includeWithoutTranslation bool, max int) []*openrussian.Word {
 	results := make(Results, 0)
+
+	qryLow := strings.ToLower(qry)
 	for _, w := range d.w {
 		if !includeWithoutTranslation && len(w.Translations) == 0 {
 			continue
 		}
-		if strings.Contains(w.Word, qry) {
+		if strings.Contains(strings.ToLower(w.Word), qryLow) {
 			r := &Result{Word: w}
 			r.Levenshtein(qry)
 			results = append(results, r)

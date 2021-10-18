@@ -91,16 +91,8 @@ func results2words(r []*Result, max int) []*openrussian.Word {
 
 func (d *Dict) SearchEnglish(qry string, max int) []*openrussian.Word {
 	qry = strings.ToLower(qry)
-	// qryNum, err := strconv.Atoi(qry)
-	// qryIsNum := false
-	// if err == nil {
-	// 	qryIsNum = true
-	// }
 	results := make(Results, 0)
 	for _, w := range d.w {
-		// if qryIsNum && w.NumberValue == qryNum {
-		// 	results = append(results, &Result{Word: w, Score: inverseScore})
-		// }
 		if found, ix := w.HasTranslation(qry); found {
 			results = append(results, &Result{Word: w, Score: inverseScore - ix})
 		}

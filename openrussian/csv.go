@@ -75,10 +75,6 @@ func DecodeWords(r io.Reader) (CSVWords, error) {
 		if err != nil {
 			return err
 		}
-		number, err := parseInt(row[10], true)
-		if err != nil {
-			return err
-		}
 
 		w.ID = ID(id)
 		w.Position = pos
@@ -90,7 +86,6 @@ func DecodeWords(r io.Reader) (CSVWords, error) {
 		w.DerivedFrom = ID(deriv)
 		w.Rank = rank
 		w.Usage = row[8]
-		w.NumberValue = number
 		w.WordType = wordType(row[11])
 		w.LanguageLevel = languageLevel(row[12])
 
@@ -213,7 +208,6 @@ func Merge(cw CSVWords, ct CSVTranslations, cn CSVNouns) Words {
 			Word:          w.Word,
 			Stressed:      w.Stressed,
 			Translations:  make([]*Translation, 0, 1),
-			NumberValue:   w.NumberValue,
 			WordType:      w.WordType,
 			LanguageLevel: w.LanguageLevel,
 			NounInfo:      noun,

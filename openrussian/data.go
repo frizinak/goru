@@ -199,7 +199,6 @@ type CSVWord struct {
 	DerivedFrom   ID
 	Rank          uint64
 	Usage         string
-	NumberValue   int
 	WordType      WordType
 	LanguageLevel LanguageLevel
 }
@@ -241,7 +240,6 @@ type Word struct {
 	Stressed      Stressed
 	DerivedFrom   *Word
 	Translations  []*Translation
-	NumberValue   int
 	WordType      WordType
 	LanguageLevel LanguageLevel
 	NounInfo      *NounInfo

@@ -55,29 +55,32 @@ func Image(height int, word string) (*image.NRGBA, error) {
 	}
 
 	fontLSrc := image.NewUniform(color.NRGBA{0, 0, 0, 255})
-	do := func() int {
+	do := func(startX1, startX2 int) (int, int) {
 		dwr := font.Drawer{
 			Dst:  img,
 			Src:  fontLSrc,
 			Face: print,
 		}
 
-		dwr.Dot = fixed.P(startX, startY+int(cursiveSize))
+		dwr.Dot = fixed.P(startX1, startY+int(cursiveSize))
 		dwr.DrawString(word)
 		width1 := int(dwr.Dot.X>>6) - startX
 
 		dwr.Face = cursive
-		dwr.Dot = fixed.P(startX, startY+padding+int(cursiveSize)+int(printSize))
+		dwr.Dot = fixed.P(startX2, startY+padding+int(cursiveSize)+int(printSize))
 		dwr.DrawString(word)
 		width2 := int(dwr.Dot.X>>6) - startX
-		width := width1
-		if width2 > width {
-			width = width2
-		}
-		return width + startX + stopX
+		return width1, width2
 	}
 
-	w := do()
+	w1, w2 := do(startX, startX)
+	w := w1 + startX + stopX
+	startX1, startX2 := startX, startX+(w1-w2)/2
+	if w2 > w {
+		w = w2 + startX + stopX
+		startX1, startX2 = startX+(w2-w1)/2, startX
+	}
+
 	img = image.NewNRGBA(image.Rect(0, 0, w, height))
 
 	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
@@ -89,7 +92,7 @@ func Image(height int, word string) (*image.NRGBA, error) {
 			img.Pix[o+3] = 255
 		}
 	}
-	do()
+	do(startX1, startX2)
 
 	return img, nil
 }

@@ -1,6 +1,7 @@
 package fuzzy
 
 import (
+	"math"
 	"strings"
 )
 
@@ -8,6 +9,7 @@ type Index struct {
 	fuzzyLength int
 	n           int
 	data        map[string][]int
+	ln          map[int]float64
 }
 
 func NewIndex(fuzzyLength int, items []string) *Index {
@@ -18,6 +20,7 @@ func NewIndex(fuzzyLength int, items []string) *Index {
 		fuzzyLength: fuzzyLength,
 		n:           len(items),
 		data:        make(map[string][]int, len(items)),
+		ln:          make(map[int]float64, len(items)),
 	}
 
 	for i, v := range items {
@@ -25,26 +28,28 @@ func NewIndex(fuzzyLength int, items []string) *Index {
 		for _, p := range fuzzy {
 			ix.data[p] = append(ix.data[p], i)
 		}
+		ix.ln[i] = float64(len(v))
 	}
 
 	return ix
 }
 
-type Include func(score, low, high int) bool
+type Include func(score, low, high float64) bool
 
-func (i *Index) Search(q string, include Include) []int {
-	scores := make([]int, i.n)
-	words := i.parts(q)
-	min, max := -1, 0
+func (index *Index) Search(q string, include Include) []int {
+	scores := make([]float64, index.n)
+	words := index.parts(q)
+	min, max := -1.0, 0.0
+	lq := float64(len(q))
 	for _, q := range words {
 		done := make(map[int]struct{})
-		if b, ok := i.data[q]; ok {
+		if b, ok := index.data[q]; ok {
 			for i := 0; i < len(b); i++ {
 				if _, ok := done[b[i]]; ok {
 					continue
 				}
 				ix := b[i]
-				scores[ix]++
+				scores[ix] += lq - math.Abs(lq-index.ln[ix])
 				done[b[i]] = struct{}{}
 			}
 		}

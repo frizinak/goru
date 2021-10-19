@@ -2,8 +2,11 @@
 
 `goru <ru or en string>`
 
+`goruweb -l <if:port>` > `http://if:port`
+
 ## roadmap
 
-- [ ] cli ru>en en>ru
+- [x] cli ru>en en>ru
+- [x] web interface
 - [ ] flashcards (web)
-- [ ] audio
+- [x] audio

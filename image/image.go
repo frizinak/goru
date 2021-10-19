@@ -29,12 +29,12 @@ func face(b []byte, size float64) (font.Face, error) {
 	return cursiveface, err
 }
 
-func Image(height int, word string) (*image.NRGBA, error) {
-	startX := 50
-	stopX := 50
-	startY := 50
-	stopY := 50
-	padding := 50
+func Image(height int, word string, fg, bg color.NRGBA) (*image.NRGBA, error) {
+	startX := height / 8
+	stopX := height / 8
+	startY := height / 8
+	stopY := height / 8
+	padding := height / 8
 	rest := height - startY - padding - stopY
 	if rest < 0 {
 		rest = 0
@@ -54,7 +54,7 @@ func Image(height int, word string) (*image.NRGBA, error) {
 		return nil, err
 	}
 
-	fontLSrc := image.NewUniform(color.NRGBA{0, 0, 0, 255})
+	fontLSrc := image.NewUniform(fg)
 	do := func(startX1, startX2 int) (int, int) {
 		dwr := font.Drawer{
 			Dst:  img,
@@ -83,13 +83,15 @@ func Image(height int, word string) (*image.NRGBA, error) {
 
 	img = image.NewNRGBA(image.Rect(0, 0, w, height))
 
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		for x := img.Rect.Min.X; x < img.Rect.Max.X; x++ {
-			o := img.PixOffset(x, y)
-			img.Pix[o+0] = 255
-			img.Pix[o+1] = 255
-			img.Pix[o+2] = 255
-			img.Pix[o+3] = 255
+	if bg.A != 0 {
+		for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
+			for x := img.Rect.Min.X; x < img.Rect.Max.X; x++ {
+				o := img.PixOffset(x, y)
+				img.Pix[o+0] = bg.R
+				img.Pix[o+1] = bg.G
+				img.Pix[o+2] = bg.B
+				img.Pix[o+3] = bg.A
+			}
 		}
 	}
 	do(startX1, startX2)

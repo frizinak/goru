@@ -110,7 +110,7 @@ func (d *Dict) SearchRussian(qry string, includeWithoutTranslation bool, max int
 		if !includeWithoutTranslation && len(w.Translations) == 0 {
 			continue
 		}
-		if strings.Contains(strings.ToLower(w.Word), qryLow) {
+		if strings.Contains(w.Lower, qryLow) {
 			r := &Result{Word: w}
 			r.Levenshtein(qry)
 			results = append(results, r)
@@ -142,14 +142,14 @@ func (d *Dict) SearchRussianFuzzy(qry string, includeWithoutTranslation bool, ma
 		l := make([]string, 0, len(d.w))
 		for _, w := range d.w {
 			words = append(words, w)
-			l = append(l, w.Word)
+			l = append(l, w.Lower)
 		}
 		d.fuzz.words = words
 		d.fuzz.index = fuzzy.NewIndex(2, l)
 	}
 
-	res := d.fuzz.index.Search(qry, func(score, low, high int) bool {
-		return score >= (low+high)/2
+	res := d.fuzz.index.Search(strings.ToLower(qry), func(score, low, high float64) bool {
+		return score == high
 	})
 
 	results := make(Results, 0, len(res))
@@ -158,7 +158,6 @@ func (d *Dict) SearchRussianFuzzy(qry string, includeWithoutTranslation bool, ma
 			continue
 		}
 		res := &Result{Word: d.fuzz.words[ix]}
-		res.Levenshtein(qry)
 		results = append(results, res)
 	}
 

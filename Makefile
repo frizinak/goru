@@ -10,12 +10,19 @@ FILES += data/data/db.gob data/data/LobsterRegular-R7AM.otf data/data/open-sans.
 CSVS = temp/words.csv temp/translations.csv
 CSVZIP = temp/openrussian.zip
 
+.PHONY: all
+all: dist/goru dist/goruweb
+
 dist/goru: $(FILES)
 	go build -o "$@" ./cmd/goru
+
+dist/goruweb: $(FILES)
+	go build -o "$@" ./cmd/goruweb
 
 .PHONY: install
 install: $(FILES)
 	go install ./cmd/goru
+	go install ./cmd/goruweb
 
 dist/gob: $(GOB_FILES)
 	go build -o "$@" ./cmd/gob

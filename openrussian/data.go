@@ -237,6 +237,7 @@ type Word struct {
 	ID            ID
 	Rank          uint64
 	Word          string
+	Lower         string
 	Stressed      Stressed
 	DerivedFrom   *Word
 	Translations  []*Translation

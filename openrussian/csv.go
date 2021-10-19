@@ -206,6 +206,7 @@ func Merge(cw CSVWords, ct CSVTranslations, cn CSVNouns) Words {
 			ID:            w.ID,
 			Rank:          w.Rank,
 			Word:          w.Word,
+			Lower:         strings.ToLower(w.Word),
 			Stressed:      w.Stressed,
 			Translations:  make([]*Translation, 0, 1),
 			WordType:      w.WordType,

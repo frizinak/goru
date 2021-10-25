@@ -7,6 +7,10 @@ DEPS = $(shell go list -f '{{ join .Deps "\n" }}' ./cmd/goru)
 FILES = $(shell go list -f $(TPL) ./cmd/goru $(DEPS))
 FILES += data/data/db.gob data/data/LobsterRegular-R7AM.otf data/data/open-sans.regular.ttf
 
+DEPS_WEB = $(shell go list -f '{{ join .Deps "\n" }}' ./cmd/goruweb)
+FILES_WEB = $(shell go list -f $(TPL) ./cmd/goruweb $(DEPS_WEB))
+FILES_WEB += data/data/db.gob data/data/LobsterRegular-R7AM.otf data/data/open-sans.regular.ttf
+
 CSVS = temp/words.csv temp/translations.csv
 CSVZIP = temp/openrussian.zip
 
@@ -16,7 +20,7 @@ all: dist/goru dist/goruweb
 dist/goru: $(FILES)
 	go build -o "$@" ./cmd/goru
 
-dist/goruweb: $(FILES)
+dist/goruweb: $(FILES_WEB)
 	go build -o "$@" ./cmd/goruweb
 
 .PHONY: install

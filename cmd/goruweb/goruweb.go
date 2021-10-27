@@ -17,9 +17,8 @@ import (
 	"strings"
 	"time"
 
-	_ "net/http/pprof"
-
 	"github.com/frizinak/goru/common"
+	"github.com/frizinak/goru/data"
 	"github.com/frizinak/goru/image"
 	"github.com/frizinak/goru/openrussian"
 	"github.com/frizinak/gotls/simplehttp"
@@ -40,6 +39,7 @@ type App struct {
 	conf         Config
 	homeTpl      *template.Template
 	wordsTpl     *template.Template
+	resultsTpl   *template.Template
 	scrapableTpl *template.Template
 }
 
@@ -59,10 +59,17 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 		return app.handleAudio, 0
 	case strings.HasPrefix(p, "i/") && strings.Count(p, "/") == 1:
 		return app.handleImg, 0
+	case strings.HasPrefix(p, "asset/") && strings.Count(p, "/") == 1:
+		return app.handleAsset, 0
 	}
 
 	return nil, 0
 }
+
+func absWord(w *openrussian.Word) string  { return fmt.Sprintf("/w/%s", w.Word) }
+func absImg(w *openrussian.Word) string   { return fmt.Sprintf("/i/%d.png", w.ID) }
+func absAudio(w *openrussian.Word) string { return fmt.Sprintf("/a/%d/%s", w.ID, w.Word) }
+func absArbitraryAudio(w string) string   { return fmt.Sprintf("/aa//%s", w) }
 
 func (app *App) cache(path string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
 	f, err := os.Open(path)
@@ -125,6 +132,35 @@ func (app *App) audio(word *openrussian.Word, w io.Writer) (int64, error) {
 	})
 }
 
+func (app *App) handleAsset(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+	p := strings.SplitN(r.URL.Path, "/", 2)
+	h := w.Header()
+	switch p[1] {
+	case "n.png":
+		h.Set("content-type", "image/png")
+		h.Set("cache-control", "max-age=86400")
+		w.Write(data.ImgN)
+		return 0, nil
+	case "f.png":
+		h.Set("content-type", "image/png")
+		h.Set("cache-control", "max-age=86400")
+		w.Write(data.ImgF)
+		return 0, nil
+	case "m.png":
+		h.Set("content-type", "image/png")
+		h.Set("cache-control", "max-age=86400")
+		w.Write(data.ImgM)
+		return 0, nil
+	case "fav.png":
+		h.Set("content-type", "image/png")
+		h.Set("cache-control", "max-age=86400")
+		w.Write(data.ImgFav)
+		return 0, nil
+	}
+
+	return http.StatusNotFound, nil
+}
+
 func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
 	p := strings.SplitN(r.URL.Path, "/", 3)
 	iID, err := strconv.Atoi(p[1])
@@ -143,7 +179,9 @@ func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logge
 		return http.StatusNotFound, nil
 	}
 
-	w.Header().Set("content-type", "audio/mpeg")
+	h := w.Header()
+	h.Set("content-type", "audio/mpeg")
+	h.Set("cache-control", "max-age=86400")
 	_, err = app.audio(word, w)
 
 	return 0, err
@@ -180,7 +218,9 @@ func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger)
 		return http.StatusNotFound, nil
 	}
 
-	w.Header().Set("content-type", "image/png")
+	h := w.Header()
+	h.Set("content-type", "image/png")
+	h.Set("cache-control", "max-age=86400")
 	_, err = app.img(word, w)
 
 	return 0, err
@@ -197,18 +237,32 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 	if len(res) == 0 && cyr {
 		res = dict.SearchRussianFuzzy(p[1], true, 30)
 	}
-	if len(res) == 0 {
-		return http.StatusNotFound, nil
+
+	var audio string
+	if len(res) != 0 && strings.EqualFold(p[1], res[0].Word) {
+		audio = absAudio(res[0])
 	}
 
+	reqw := strings.ToLower(r.Header.Get("X-Requested-With"))
+	xhr := reqw == "fetch" || reqw == "xmlhttprequest"
+
+	d := WordPage{Query: p[1], Audio: audio, Words: res}
+
 	w.Header().Set("content-type", "text/html")
-	return 0, app.wordsTpl.Execute(w, res)
+	if xhr {
+		return 0, app.resultsTpl.Execute(w, d)
+	}
+
+	return 0, app.wordsTpl.Execute(w, d)
+}
+
+type WordPage struct {
+	Query string
+	Audio string
+	Words []*openrussian.Word
 }
 
 func main() {
-	go func() {
-		log.Fatal(http.ListenAndServe(":6060", nil))
-	}()
 	var addr string
 	var cacheDir string
 	flag.StringVar(&addr, "l", ":80", "address to bind to")
@@ -229,75 +283,105 @@ func main() {
 		panic(err)
 	}
 
-	tpl := template.Must(mtpl.Parse(
+	tpl := template.Must(mtpl.Funcs(template.FuncMap{
+		"absWord":  absWord,
+		"absImg":   absImg,
+		"absAudio": absAudio,
+		"genderImg": func(gender openrussian.Gender) string {
+			switch gender {
+			case openrussian.N:
+				return "/asset/n.png"
+			case openrussian.F:
+				return "/asset/f.png"
+			case openrussian.M:
+				return "/asset/m.png"
+			default:
+				return ""
+			}
+		},
+	}).Parse(
 		`{{- define "trans" -}}
 <div>{{ .Translation }}</div>
-{{ if .Info }}<div>{{.Info }}</div>{{ end }}
-{{ if .Example -}}
+{{ if .Info }}<div>{{ .Info }}</div>{{ end }}
+{{- if .Example -}}
 <div>
 	<p>{{ .Example -}}</p>
 	{{ if .ExampleTranslation }}<p>{{ .ExampleTranslation}}</p>{{ end }}
 </div>
-{{ end -}}
+{{- end -}}
 {{- end -}}
 
-{{- define "gender" -}}{{ genderSymbol . }}{{- end -}}
+{{- define "gender" -}}{{ with genderImg . }}<img src="{{ . }}"/>{{ end }}{{- end -}}
 
 {{- define "word" -}}
-<td>
+<td class="smol">
 {{- template "wordStr" . -}}
 <div class="scrape">
-<a href="/i/{{ .ID }}.png">img</a>
-<a href="/a/{{ .ID }}/{{ .Word }}">audio</a>
+<a href="{{ absImg . }}">img</a>
+<a href="{{ absAudio . }}">audio</a>
 </div>
+<audio controls>
+<source src="{{ absAudio . }}" type="audio/mpeg">
+</audio>
 </td>
-<td class="img-container">
-<a class="img"><img src="/i/{{ .ID }}.png"/></a>
-</td>
-<td>
+<td class="img-container"><a class="img" href="#"><img src="{{ absImg . }}"/></a></td>
+<td class="smol gender">
 {{- if .NounInfo }} {{ template "gender" .NounInfo.Gender }}{{ end -}}
 </td>
-<td>
+<td class="smol">
 {{- .WordType -}}
 </td>
-<td>
-{{- if .DerivedFrom }}<a href="/w/{{ .DerivedFrom.Word }}">{{ .DerivedFrom.Word }}</a>{{ end -}}
+<td class="smol">
+{{- if .DerivedFrom }}<a href="{{ absWord .DerivedFrom }}">{{ .DerivedFrom.Word }}</a>{{ end -}}
 </td>
 <td>
 <ul>
-{{- range .Translations }}
+{{- range .Translations -}}
 <li>{{ template "trans" . }}</li>
-{{ end -}}
+{{- end -}}
 </ul>
 </td>
-<td>
-<audio controls>
-  <source src="/a/{{ .ID }}/{{ .Word }}" type="audio/mpeg">
-</audio>
+<td class="smollish">
+<a class="c-normal copy" href="#">copy</a>
+{{- if ne .Word .Stressed -}}
+<a class="c-stressed copy" href="#">copy stressed</a>
+{{- end }}
 </td>
 {{- end -}}
 
 {{- define "wordStr" -}}
-{{- stressednc . -}}
+<span class="normal">{{ unstressed . }}</span><span class="stressed">{{ stressednc . }}</span><br/>
 {{- end -}}
 
 {{- define "header" -}}
 <!DOCTYPE html>
 <html>
 <head>
-	<meta charset="UTF8">
+	<meta charset="utf-8">
 	<title>{{ . }}</title>
+	<link rel="shortcut icon" type="image/png" href="/asset/fav.png"/>
 	<style>
-		* { padding: 0; margin: 0; }
-		html, body { background-color: #151515; color: #fff; }
-		main { max-width: 1400px; width: 95%; margin: 0 auto 0 auto; margin-top: 20px; }
-		td { padding: 20px; }
+		*                { padding: 0; margin: 0; box-sizing: border-box; }
+		html, body       { background-color: #151515; color: #fff; }
+		main             { max-width: 1400px; width: 95%; margin: 0 auto 0 auto; margin-top: 20px; }
+		.gender img      { width: 25px; height: auto; }
+		.stressed        { display: none; }
+		.copy            { display: block; transition: color 500ms; }
+		.copy.copied     { color: #afa; }
+		.copy.error      { color: #faa; }
+		.results table   { width: 100%; }
+		.results         { margin-top: 40px; }
+		td               { padding: 20px; width: 20%; }
+		td.smol          { width: 5%; }
+		td.smollish      { width: 10%; }
 		td.img-container { text-align: center; }
-		.img { display: block; min-width: 600px; }
-		img { height: 150px; width: auto; }
-		audio { display: none; }
-		a { color: #ccc; text-decoration: underline; }
-		.scrape { display: none; }
+		img              { height: 150px; width: auto; }
+		audio            { display: none; }
+		a                { color: #ccc; text-decoration: underline; }
+		.scrape          { display: none; }
+		form             { position: relative; }
+		form input       { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
+		form .submit     { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
 	</style>
 </head>
 <body>
@@ -310,38 +394,29 @@ func main() {
 </html>
 {{- end -}}
 
-{{ template "header" "GoRussian" }}
-	<table>
-		{{- range . }}
-		<tr>
-{{ template "word" . }}
-		</tr>
-		{{ end -}}
-	</table>
+{{- define "results" -}}
+{{ if .Words -}}
+<table>
+{{- range .Words }}
+<tr>{{ template "word" . }}</tr>
+{{ end -}}
+</table>
+{{ else -}}
+No results
+{{ end -}}
+{{- end -}}
 
-	<script>
-		let els = document.getElementsByClassName('img');
-		let audios = document.getElementsByTagName('audio');
-		for (let i = 0; i < audios.length; i++) {
-			audios[i].style.display = 'none';
-		}
-		for (let i = 0; i < els.length; i++) {
-			els[i].onclick = function(e) {
-				return function() {
-					let audio = e.parentElement.parentElement.getElementsByTagName('audio')[0];
-					let wasP = audio.paused || audio.ended;
-					for (let i = 0; i < audios.length; i++) {
-						audios[i].pause();
-						audios[i].currentTime = 0;
-					}
-					if (wasP) {
-						audio.volume = 1;
-						audio.play();
-					}
-				};
-			}(els[i])
-		}
-	</script>
+{{ template "header" "GoRussian" }}
+<div class="input">
+<form>
+<input type="text"   class="val"    value="{{ .Query }}" />
+<input type="submit" class="submit" value=">"            />
+</form>
+</div>
+<div class="results">
+{{ template "results" . }}
+</div>
+<script>` + data.AppJS + `</script>
 {{ template "footer" }}`,
 	))
 
@@ -352,8 +427,8 @@ func main() {
 
 	scrapableTpl := template.Must(template.Must(tpl.Clone()).Parse(`
 {{- define "word" -}}
-<a href="/i/{{ .ID }}.png">w</a>
-<a href="/a/{{ .ID }}/{{ .Word }}">w</a>
+<a href="{{ absImg . }}">w</a>
+<a href="{{ absAudio . }}">w</a>
 {{- end -}}
 `))
 
@@ -361,6 +436,10 @@ func main() {
 {{- template "header" "Error" }}
 	{{ . }}
 {{ template "footer" }}`))
+
+	resultsTpl := template.Must(tpl.New("xhr").Parse(`
+{{- template "results" . -}}
+`))
 
 	audioCacheDir := filepath.Join(cacheDir, "audio")
 	imgCacheDir := filepath.Join(cacheDir, "img")
@@ -376,6 +455,7 @@ func main() {
 		wordsTpl:     tpl,
 		homeTpl:      homeTpl,
 		scrapableTpl: scrapableTpl,
+		resultsTpl:   resultsTpl,
 	}
 	s := tls.New(app.route, l)
 

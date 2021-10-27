@@ -33,13 +33,6 @@ func parseUint64(d string, optional bool) (uint64, error) {
 	return strconv.ParseUint(d, 10, 64)
 }
 
-func parseInt(d string, optional bool) (int, error) {
-	if optional && d == "" {
-		return 0, nil
-	}
-	return strconv.Atoi(d)
-}
-
 func DecodeWords(r io.Reader) (CSVWords, error) {
 	words := make(CSVWords, 10000)
 	err := dec(r, func(n int, row []string) error {

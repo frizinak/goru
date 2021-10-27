@@ -99,5 +99,5 @@ let fetchWord = function () {
         history.replaceState({}, '', absWord(w));
     });
 };
-setInterval(fetchWord, 1000);
+setInterval(fetchWord, 500);
 })();

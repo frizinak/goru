@@ -24,14 +24,14 @@ CSVZIP = temp/openrussian.zip
 all: dist/goru dist/goruweb
 
 dist/goru: $(FILES)
-	go build -o "$@" ./cmd/goru
+	go build -tags noweb -o "$@" ./cmd/goru
 
 dist/goruweb: $(FILES_WEB)
-	go build -tags web -o "$@" ./cmd/goruweb
+	go build -o "$@" ./cmd/goruweb
 
 .PHONY: install
 install: $(FILES)
-	go install ./cmd/goru
+	go install -tags noweb ./cmd/goru
 	go install ./cmd/goruweb
 
 dist/gob: $(GOB_FILES)

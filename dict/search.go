@@ -1,6 +1,7 @@
 package dict
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -8,7 +9,7 @@ import (
 	"github.com/frizinak/goru/openrussian"
 )
 
-func levenshtein(s, t string) int {
+func levenshteinMatrix(s, t []rune) (func(int, int) int, []int) {
 	d := make([]int, (len(s)+1)*(len(t)+1))
 	stride := len(t) + 1
 	offset := func(i, j int) int { return i*stride + j }
@@ -44,7 +45,122 @@ func levenshtein(s, t string) int {
 		}
 	}
 
+	return offset, d
+}
+
+func Levenshtein(s, t []rune) int {
+	if string(s) == string(t) {
+		return 0
+	}
+	offset, d := levenshteinMatrix(s, t)
+
 	return d[offset(len(s), len(t))]
+}
+
+type EditType uint8
+
+const (
+	EditNone EditType = iota
+	EditAdd
+	EditDel
+	EditChange
+)
+
+type Edit struct {
+	Type EditType
+	Rune rune
+}
+
+func (e Edit) String() string { return string(e.Rune) }
+
+func (e Edit) DebugString() string {
+	t := "="
+	switch e.Type {
+	case EditAdd:
+		t = "+"
+	case EditDel:
+		t = "-"
+	case EditChange:
+		t = "~"
+	}
+	return fmt.Sprintf("%s%s", t, string(e.Rune))
+}
+
+type Edits []Edit
+
+func (e Edits) String() string {
+	l := make([]string, len(e))
+	for i := range e {
+		l[i] = e[i].String()
+	}
+	return strings.Join(l, " ")
+}
+
+func (e Edits) HasEdits() bool {
+	for i := range e {
+		if e[i].Type != EditNone {
+			return true
+		}
+	}
+	return false
+}
+
+func LevenshteinEdits(s, t []rune) Edits {
+	offset, d := levenshteinMatrix(s, t)
+	m := len(s)
+	if len(t) > m {
+		m = len(t)
+	}
+	r := make(Edits, 0, m)
+
+	// for j := 0; j <= len(t); j++ {
+	// 	for i := 0; i <= len(s); i++ {
+	// 		fmt.Printf("%2d ", d[offset(i, j)])
+	// 	}
+	// 	fmt.Println()
+	// }
+
+	var bt func(i, j int)
+	bt = func(i, j int) {
+		if i == 0 || j == 0 {
+			if j > 0 {
+				for n := j; n > 0; n-- {
+					r = append(r, Edit{Type: EditAdd, Rune: t[n-1]})
+				}
+			}
+			if i > 0 {
+				for n := i; n > 0; n-- {
+					r = append(r, Edit{Type: EditDel, Rune: s[n-1]})
+				}
+			}
+			return
+		}
+		if s[i-1] == t[j-1] {
+			r = append(r, Edit{Type: EditNone, Rune: t[j-1]})
+			bt(i-1, j-1)
+			return
+		}
+		n, w, nw := d[offset(i, j-1)], d[offset(i-1, j)], d[offset(i-1, j-1)]
+		if n < w && n <= nw {
+			r = append(r, Edit{Type: EditAdd, Rune: t[j-1]})
+			bt(i, j-1)
+			return
+		} else if w <= nw {
+			r = append(r, Edit{Type: EditDel, Rune: s[i-1]})
+			bt(i-1, j)
+			return
+		}
+		r = append(r, Edit{Type: EditChange, Rune: t[j-1]})
+		bt(i-1, j-1)
+	}
+
+	bt(len(s), len(t))
+	for i := 0; i < len(r)/2; i++ {
+		j := len(r) - i - 1
+		r[i], r[j] = r[j], r[i]
+	}
+
+	return r
 }
 
 const inverseScore = 1<<31 - 1
@@ -71,7 +187,7 @@ func (r Results) Less(i, j int) bool {
 
 func (r Results) Swap(i, j int) { r[i], r[j] = r[j], r[i] }
 func (r *Result) Levenshtein(qry string) {
-	r.Score = inverseScore - levenshtein(r.Word.Word, qry)
+	r.Score = inverseScore - Levenshtein([]rune(r.Word.Word), []rune(qry))
 }
 
 func results2words(r []*Result, max int) []*openrussian.Word {

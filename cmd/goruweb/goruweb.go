@@ -19,6 +19,7 @@ import (
 
 	"github.com/frizinak/goru/common"
 	"github.com/frizinak/goru/data"
+	"github.com/frizinak/goru/dict"
 	"github.com/frizinak/goru/image"
 	"github.com/frizinak/goru/openrussian"
 	"github.com/frizinak/gotls/simplehttp"
@@ -36,11 +37,21 @@ type Config struct {
 }
 
 type App struct {
+	rate         chan struct{}
 	conf         Config
 	homeTpl      *template.Template
 	wordsTpl     *template.Template
 	resultsTpl   *template.Template
 	scrapableTpl *template.Template
+}
+
+func (app *App) ratelimit(h simplehttp.HandleFunc) simplehttp.HandleFunc {
+	return func(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+		app.rate <- struct{}{}
+		n, err := h(w, r, l)
+		<-app.rate
+		return n, err
+	}
 }
 
 func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, int) {
@@ -54,7 +65,7 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 
 	switch {
 	case strings.HasPrefix(p, "w/") && strings.Count(p, "/") == 1:
-		return app.handleWord, 0
+		return app.ratelimit(app.handleWord), 0
 	case strings.HasPrefix(p, "a/") && strings.Count(p, "/") == 2:
 		return app.handleAudio, 0
 	case strings.HasPrefix(p, "i/") && strings.Count(p, "/") == 1:
@@ -188,15 +199,31 @@ func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logge
 }
 
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+	dict, err := common.GetDict()
+	if err != nil {
+		return 0, err
+	}
+	words := dict.Words()
+	d := WordPage{Query: "", Words: []*openrussian.Word{words[33002]}}
+
 	w.Header().Set("content-type", "text/html")
-	return 0, app.homeTpl.Execute(w, "GoRussian")
+	return 0, app.wordsTpl.Execute(w, d)
+
+	// w.Header().Set("content-type", "text/html")
+	// return 0, app.homeTpl.Execute(w, "GoRussian")
+
 	// dict, err := common.GetDict()
 	// if err != nil {
 	// 	return 0, err
 	// }
 
 	// w.Header().Set("content-type", "text/html")
-	// return 0, app.scrapableTpl.Execute(w, dict.Words())
+	// mp := dict.Words()
+	// words := make([]*openrussian.Word, 0, len(mp))
+	// for _, w := range mp {
+	// 	words = append(words, w)
+	// }
+	// return 0, app.scrapableTpl.Execute(w, WordPage{Words: words})
 }
 
 func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
@@ -228,14 +255,14 @@ func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger)
 
 func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
 	p := strings.SplitN(r.URL.Path, "/", 2)
-	dict, err := common.GetDict()
+	dct, err := common.GetDict()
 	if err != nil {
 		return 0, err
 	}
 
-	res, cyr := dict.Search(p[1], true, 30)
+	res, cyr := dct.Search(p[1], true, 30)
 	if len(res) == 0 && cyr {
-		res = dict.SearchRussianFuzzy(p[1], true, 30)
+		res = dct.SearchRussianFuzzy(p[1], true, 30)
 	}
 
 	var audio string
@@ -246,8 +273,16 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 	reqw := strings.ToLower(r.Header.Get("X-Requested-With"))
 	xhr := reqw == "fetch" || reqw == "xmlhttprequest"
 
-	d := WordPage{Query: p[1], Audio: audio, Words: res}
+	var edits dict.Edits
+	if len(res) != 0 {
+		q := []rune(p[1])
+		edits = dict.LevenshteinEdits([]rune(res[0].Word), q)
+		if !edits.HasEdits() {
+			edits = nil
+		}
+	}
 
+	d := WordPage{Query: p[1], Edits: edits, Audio: audio, Words: res}
 	w.Header().Set("content-type", "text/html")
 	if xhr {
 		return 0, app.resultsTpl.Execute(w, d)
@@ -258,6 +293,7 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 
 type WordPage struct {
 	Query string
+	Edits dict.Edits
 	Audio string
 	Words []*openrussian.Word
 }
@@ -284,6 +320,19 @@ func main() {
 	}
 
 	tpl := template.Must(mtpl.Funcs(template.FuncMap{
+		"editType": func(t dict.EditType) string {
+			switch t {
+			case dict.EditNone:
+				return "k"
+			case dict.EditAdd:
+				return "a"
+			case dict.EditDel:
+				return "d"
+			case dict.EditChange:
+				return "c"
+			}
+			return "h"
+		},
 		"absWord":  absWord,
 		"absImg":   absImg,
 		"absAudio": absAudio,
@@ -361,27 +410,32 @@ func main() {
 	<title>{{ . }}</title>
 	<link rel="shortcut icon" type="image/png" href="/asset/fav.png"/>
 	<style>
-		*                { padding: 0; margin: 0; box-sizing: border-box; }
-		html, body       { background-color: #151515; color: #fff; }
-		main             { max-width: 1400px; width: 95%; margin: 0 auto 0 auto; margin-top: 20px; }
-		.gender img      { width: 25px; height: auto; }
-		.stressed        { display: none; }
-		.copy            { display: block; transition: color 500ms; }
-		.copy.copied     { color: #afa; }
-		.copy.error      { color: #faa; }
-		.results table   { width: 100%; }
-		.results         { margin-top: 40px; }
-		td               { padding: 20px; width: 20%; }
-		td.smol          { width: 5%; }
-		td.smollish      { width: 10%; }
-		td.img-container { text-align: center; }
-		img              { height: 150px; width: auto; }
-		audio            { display: none; }
-		a                { color: #ccc; text-decoration: underline; }
-		.scrape          { display: none; }
-		form             { position: relative; }
-		form input       { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
-		form .submit     { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
+		*                  { padding: 0; margin: 0; box-sizing: border-box; }
+		html, body         { background-color: #151515; color: #fff; }
+		main               { max-width: 1400px; width: 95%; margin: 0 auto 0 auto; margin-top: 20px; }
+		.gender img        { width: 25px; height: auto; }
+		.stressed          { display: none; }
+		.copy              { display: block; transition: color 500ms; }
+		.copy.copied       { color: #afa; }
+		.copy.error        { color: #faa; }
+		.results table     { width: 100%; }
+		.results           { margin-top: 40px; }
+		td                 { padding: 20px; width: 20%; }
+		td.smol            { width: 5%; }
+		td.smollish        { width: 10%; }
+		td.img-container   { text-align: center; }
+		img                { height: 150px; width: auto; }
+		audio              { display: none; }
+		a                  { color: #ccc; text-decoration: underline; }
+		.scrape            { display: none; }
+		form               { position: relative; }
+		form input, .edits { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
+		form .submit       { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
+		.edits             { margin-top: 20px; width: 10; border-color: #600; }
+		.edit.h            { display: none; }
+		.edit.a            { background-color: #600; color: #600; }
+		.edit.d,
+		.edit.c            { background-color: #600; color: #fff; }
 	</style>
 </head>
 <body>
@@ -395,6 +449,13 @@ func main() {
 {{- end -}}
 
 {{- define "results" -}}
+{{ with .Edits }}
+<div class="edits"/>
+{{ range . -}}
+<span class="edit {{ editType .Type }}">{{ . }}</span>
+{{- end }}
+</div>
+{{ end }}
 {{ if .Words -}}
 <table>
 {{- range .Words }}
@@ -409,8 +470,8 @@ No results
 {{ template "header" "GoRussian" }}
 <div class="input">
 <form>
-<input type="text"   class="val"    value="{{ .Query }}" />
-<input type="submit" class="submit" value=">"            />
+<input type="text"   class="val"    value="{{ .Query }}" placeholder="Cлово | Word" />
+<input type="submit" class="submit" value=">"                                       />
 </form>
 </div>
 <div class="results">
@@ -427,8 +488,7 @@ No results
 
 	scrapableTpl := template.Must(template.Must(tpl.Clone()).Parse(`
 {{- define "word" -}}
-<a href="{{ absImg . }}">w</a>
-<a href="{{ absAudio . }}">w</a>
+<a href="{{ absWord . }}">w</a>
 {{- end -}}
 `))
 
@@ -448,6 +508,7 @@ No results
 
 	l := log.New(os.Stderr, "", log.Ldate|log.Ltime)
 	app := &App{
+		rate: make(chan struct{}, 3),
 		conf: Config{
 			AudioCacheDir: audioCacheDir,
 			ImageCacheDir: imgCacheDir,

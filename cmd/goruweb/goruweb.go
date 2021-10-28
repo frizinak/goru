@@ -260,9 +260,12 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 		return 0, err
 	}
 
-	res, cyr := dct.Search(p[1], true, 30)
-	if len(res) == 0 && cyr {
-		res = dct.SearchRussianFuzzy(p[1], true, 30)
+	const max = 30
+	var res []*openrussian.Word
+	if dict.IsCyrillic(p[1]) {
+		res = dct.SearchRussianFuzzy(p[1], true, max)
+	} else {
+		res = dct.SearchEnglish(p[1], max)
 	}
 
 	var audio string

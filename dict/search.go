@@ -111,11 +111,7 @@ func (e Edits) HasEdits() bool {
 
 func LevenshteinEdits(s, t []rune) Edits {
 	offset, d := levenshteinMatrix(s, t)
-	m := len(s)
-	if len(t) > m {
-		m = len(t)
-	}
-	r := make(Edits, 0, m)
+	r := make(Edits, len(s)+len(t))
 
 	// for j := 0; j <= len(t); j++ {
 	// 	for i := 0; i <= len(s); i++ {
@@ -124,45 +120,43 @@ func LevenshteinEdits(s, t []rune) Edits {
 	// 	fmt.Println()
 	// }
 
+	ri := len(s) + len(t)
 	var bt func(i, j int)
 	bt = func(i, j int) {
+		ri--
 		if i == 0 && j == 0 {
 			return
 		} else if i == 0 && j > 0 {
-			r = append(r, Edit{Type: EditAdd, Rune: t[j-1]})
+			r[ri] = Edit{Type: EditAdd, Rune: t[j-1]}
 			bt(i, j-1)
 			return
 		} else if j == 0 && i > 0 {
-			r = append(r, Edit{Type: EditDel, Rune: s[i-1]})
+			r[ri] = Edit{Type: EditDel, Rune: s[i-1]}
 			bt(i-1, j)
 			return
 		} else if s[i-1] == t[j-1] {
-			r = append(r, Edit{Type: EditNone, Rune: t[j-1]})
+			r[ri] = Edit{Type: EditNone, Rune: t[j-1]}
 			bt(i-1, j-1)
 			return
 		}
 
 		n, w, nw := d[offset(i, j-1)], d[offset(i-1, j)], d[offset(i-1, j-1)]
 		if n < w && n <= nw {
-			r = append(r, Edit{Type: EditAdd, Rune: t[j-1]})
+			r[ri] = Edit{Type: EditAdd, Rune: t[j-1]}
 			bt(i, j-1)
 			return
 		} else if w <= nw {
-			r = append(r, Edit{Type: EditDel, Rune: s[i-1]})
+			r[ri] = Edit{Type: EditDel, Rune: s[i-1]}
 			bt(i-1, j)
 			return
 		}
-		r = append(r, Edit{Type: EditChange, Rune: t[j-1]})
+		r[ri] = Edit{Type: EditChange, Rune: t[j-1]}
 		bt(i-1, j-1)
 	}
 
 	bt(len(s), len(t))
-	for i := 0; i < len(r)/2; i++ {
-		j := len(r) - i - 1
-		r[i], r[j] = r[j], r[i]
-	}
 
-	return r
+	return r[ri+1:]
 }
 
 const inverseScore = 1<<31 - 1
@@ -239,7 +233,7 @@ func (d *Dict) SearchRussian(qry string, includeWithoutTranslation bool, max int
 	return results2words(results, max)
 }
 
-func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) ([]*openrussian.Word, bool) {
+func IsCyrillic(qry string) bool {
 	cyrillic := 0
 	for _, c := range qry {
 		if c >= '\u0400' && c <= '\u04FF' {
@@ -247,36 +241,76 @@ func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) ([]*o
 		}
 	}
 
-	if cyrillic < len(qry)/2 {
-		return d.SearchEnglish(qry, max), false
+	return cyrillic >= len(qry)/2
+}
+
+func (d *Dict) Search(qry string, includeWithoutTranslation bool, max int) ([]*openrussian.Word, bool) {
+	if IsCyrillic(qry) {
+		return d.SearchRussian(qry, includeWithoutTranslation, max), true
 	}
 
-	return d.SearchRussian(qry, includeWithoutTranslation, max), true
+	return d.SearchEnglish(qry, max), false
+}
+
+func (d *Dict) InitFuzzIndex() {
+	if d.fuzz.index != nil {
+		return
+	}
+	d.fuzz.l.Lock()
+	if d.fuzz.index != nil {
+		d.fuzz.l.Unlock()
+		return
+	}
+
+	words := make([]*openrussian.Word, 0, len(d.w))
+	l := make([]string, 0, len(d.w))
+	for _, w := range d.w {
+		words = append(words, w)
+		l = append(l, w.Lower)
+	}
+	d.fuzz.words = words
+	d.fuzz.index = fuzzy.NewIndex(2, l)
+	d.fuzz.l.Unlock()
+}
+
+func (d *Dict) GetFuzz() *fuzzy.Index {
+	d.InitFuzzIndex()
+	return d.fuzz.index
 }
 
 func (d *Dict) SearchRussianFuzzy(qry string, includeWithoutTranslation bool, max int) []*openrussian.Word {
-	if d.fuzz.index == nil {
-		words := make([]*openrussian.Word, 0, len(d.w))
-		l := make([]string, 0, len(d.w))
-		for _, w := range d.w {
-			words = append(words, w)
-			l = append(l, w.Lower)
-		}
-		d.fuzz.words = words
-		d.fuzz.index = fuzzy.NewIndex(2, l)
+	d.InitFuzzIndex()
+	if len(qry) > 1<<8-1 {
+		qry = qry[:1<<8-1]
+	}
+	lq := uint8(len(qry) / 5)
+	if lq == 0 {
+		lq = 1
 	}
 
-	res := d.fuzz.index.Search(strings.ToLower(qry), func(score, low, high float64) bool {
-		return score == high
+	tmp := make(Results, 0, max)
+	d.fuzz.index.Search(strings.ToLower(qry), func(index int, score, low, high uint8) {
+		if score >= lq {
+			tmp = append(tmp, &Result{Word: d.fuzz.words[index], Score: int(score)})
+		}
 	})
 
-	results := make(Results, 0, len(res))
-	for _, ix := range res {
-		if !includeWithoutTranslation && len(d.fuzz.words[ix].Translations) == 0 {
+	var premax = 500
+	if 2*max > premax {
+		premax = 2 * max
+	}
+	if len(tmp) > premax {
+		sort.Sort(tmp)
+		tmp = tmp[:premax]
+	}
+
+	results := make(Results, 0, len(tmp))
+	for _, w := range tmp {
+		if !includeWithoutTranslation && len(w.Translations) == 0 {
 			continue
 		}
-		res := &Result{Word: d.fuzz.words[ix]}
-		results = append(results, res)
+		w.Levenshtein(qry)
+		results = append(results, w)
 	}
 
 	sort.Sort(results)

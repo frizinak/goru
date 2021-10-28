@@ -1,6 +1,8 @@
 package dict
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestEdits(t *testing.T) {
 	tests := []struct {
@@ -22,19 +24,34 @@ func TestEdits(t *testing.T) {
 			"abc go russ",
 			"+a +b +c +  =g =o =  =r =u =s =s -i -a -n",
 		},
+		{
+			"",
+			"abc",
+			"+a +b +c",
+		},
+		{
+			"abc",
+			"",
+			"-a -b -c",
+		},
+		{
+			"",
+			"",
+			"",
+		},
 	}
 
 	for _, d := range tests {
 		res := LevenshteinEdits([]rune(d.a), []rune(d.b))
 		diff := res.DiffString()
 		if diff != d.e {
-			t.Errorf("edits incorrect for %s - %s\nexp: %s\ngot: %s", d.a, d.b, d.e, diff)
+			t.Errorf("edits incorrect for '%s' - '%s'\nexp: %s\ngot: %s", d.a, d.b, d.e, diff)
 		}
 	}
 }
 
 var benchS = []rune("здравствуйте")
-var benchT = []rune("здраствуйтее")
+var benchT = []rune("драствуйтее")
 
 func BenchmarkLevenshtein(b *testing.B) {
 	for i := 0; i < b.N; i++ {

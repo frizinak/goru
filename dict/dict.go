@@ -1,6 +1,8 @@
 package dict
 
 import (
+	"sync"
+
 	"github.com/frizinak/goru/fuzzy"
 	"github.com/frizinak/goru/openrussian"
 )
@@ -9,13 +11,16 @@ type Dict struct {
 	w openrussian.Words
 
 	fuzz struct {
+		l     sync.Mutex
 		words []*openrussian.Word
 		index *fuzzy.Index
 	}
 }
 
 func New(w openrussian.Words) *Dict {
-	return &Dict{w: w}
+	return &Dict{
+		w: w,
+	}
 }
 
 func DerivedList(w *openrussian.Word) []*openrussian.Word {

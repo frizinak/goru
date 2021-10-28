@@ -1,12 +1,10 @@
 # goru
 
-`goru <ru or en string>`
+A cli and web-ui russian dictionary using openrussian.org data
 
-`goruweb -l <if:port>` > `http://if:port`
+## features
 
-## roadmap
-
-- [x] cli ru>en en>ru
-- [x] web interface
-- [ ] flashcards (web)
-- [x] audio
+- fuzzy search in latin or cyrillic script
+- shows your typos
+- [web] russian cursive preview
+- [web] audio

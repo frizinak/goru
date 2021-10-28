@@ -63,4 +63,10 @@ clean:
 reset: clean
 	rm -rf temp
 
+.PHONY: test
+test:
+	go test ./...
 
+.PHONY: bench
+bench:
+	go test -test.benchmem -bench=. ./...

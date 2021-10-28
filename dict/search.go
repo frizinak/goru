@@ -49,11 +49,7 @@ func levenshteinMatrix(s, t []rune) (func(int, int) int, []int) {
 }
 
 func Levenshtein(s, t []rune) int {
-	if string(s) == string(t) {
-		return 0
-	}
 	offset, d := levenshteinMatrix(s, t)
-
 	return d[offset(len(s), len(t))]
 }
 
@@ -73,7 +69,7 @@ type Edit struct {
 
 func (e Edit) String() string { return string(e.Rune) }
 
-func (e Edit) DebugString() string {
+func (e Edit) DiffString() string {
 	t := "="
 	switch e.Type {
 	case EditAdd:
@@ -92,6 +88,14 @@ func (e Edits) String() string {
 	l := make([]string, len(e))
 	for i := range e {
 		l[i] = e[i].String()
+	}
+	return strings.Join(l, " ")
+}
+
+func (e Edits) DiffString() string {
+	l := make([]string, len(e))
+	for i := range e {
+		l[i] = e[i].DiffString()
 	}
 	return strings.Join(l, " ")
 }
@@ -122,24 +126,22 @@ func LevenshteinEdits(s, t []rune) Edits {
 
 	var bt func(i, j int)
 	bt = func(i, j int) {
-		if i == 0 || j == 0 {
-			if j > 0 {
-				for n := j; n > 0; n-- {
-					r = append(r, Edit{Type: EditAdd, Rune: t[n-1]})
-				}
-			}
-			if i > 0 {
-				for n := i; n > 0; n-- {
-					r = append(r, Edit{Type: EditDel, Rune: s[n-1]})
-				}
-			}
+		if i == 0 && j == 0 {
 			return
-		}
-		if s[i-1] == t[j-1] {
+		} else if i == 0 && j > 0 {
+			r = append(r, Edit{Type: EditAdd, Rune: t[j-1]})
+			bt(i, j-1)
+			return
+		} else if j == 0 && i > 0 {
+			r = append(r, Edit{Type: EditDel, Rune: s[i-1]})
+			bt(i-1, j)
+			return
+		} else if s[i-1] == t[j-1] {
 			r = append(r, Edit{Type: EditNone, Rune: t[j-1]})
 			bt(i-1, j-1)
 			return
 		}
+
 		n, w, nw := d[offset(i, j-1)], d[offset(i-1, j)], d[offset(i-1, j-1)]
 		if n < w && n <= nw {
 			r = append(r, Edit{Type: EditAdd, Rune: t[j-1]})

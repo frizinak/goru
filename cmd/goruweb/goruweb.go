@@ -496,7 +496,7 @@ No results
 {{ template "header" "GoRussian" }}
 <div class="input">
 <form>
-<input type="text"   class="val"    value="{{ .Query }}" placeholder="Cлово | Word" />
+<input type="text"   class="val"    value="{{ .Query }}" placeholder="Слово | Word" />
 <input type="submit" class="submit" value=">"                                       />
 </form>
 </div>

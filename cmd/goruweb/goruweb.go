@@ -37,6 +37,7 @@ type Config struct {
 }
 
 type App struct {
+	prod         bool
 	rate         chan struct{}
 	conf         Config
 	homeTpl      *template.Template
@@ -55,6 +56,27 @@ func (app *App) ratelimit(h simplehttp.HandleFunc) simplehttp.HandleFunc {
 }
 
 func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, int) {
+	if app.prod && !strings.HasPrefix(r.RemoteAddr, "192.168.") {
+		buf := bytes.NewBuffer(make([]byte, 0, 255))
+		buf.WriteString("CONN[")
+		buf.WriteString(r.RemoteAddr)
+		buf.WriteString("] UA[")
+		buf.WriteString(r.UserAgent())
+		buf.WriteString("] PATH[")
+		buf.WriteString(r.Method)
+		buf.WriteString(" ")
+		buf.WriteString(r.URL.String())
+		buf.WriteString("]")
+		ref := r.Referer()
+		if strings.Contains(ref, "home.friz.pro") {
+			ref = ""
+		}
+		buf.WriteString(" REF[")
+		buf.WriteString(ref)
+		buf.WriteString("]")
+		buf.WriteByte(10)
+		buf.WriteTo(os.Stdout)
+	}
 	p := strings.Trim(r.URL.Path, "/")
 	r.URL.Path = p
 
@@ -512,6 +534,7 @@ No results
 
 	l := log.New(os.Stderr, "", log.Ldate|log.Ltime)
 	app := &App{
+		prod: Prod,
 		rate: make(chan struct{}, 3),
 		conf: Config{
 			AudioCacheDir: audioCacheDir,
@@ -539,5 +562,5 @@ No results
 		s.SetHTTPErrorHandler(i, simplehttp.NewHTTPError("text/html", b))
 	}
 
-	l.Fatal(s.Start(addr, false))
+	l.Fatal(run(s, addr))
 }

@@ -6,9 +6,17 @@ GOB_FILES = $(shell go list -f $(TPL) ./cmd/gob $(GOB_DEPS))
 MIN_DEPS = $(shell go list -f '{{ join .Deps "\n" }}' ./cmd/minify)
 MIN_FILES = $(shell go list -f $(TPL) ./cmd/minify $(MIN_DEPS))
 
+KEYS_DEPS = $(shell go list -f '{{ join .Deps "\n" }}' ./cmd/keys)
+KEYS_FILES = $(shell go list -f $(TPL) ./cmd/keys $(KEYS_DEPS))
+
 EXTRA = data/data/db.gob
 EXTRA += data/data/app.js
 EXTRA += data/data/*
+
+EXTRA_PROD = cmd/goruweb/private.go
+EXTRA_PROD += cmd/goruweb/private_account_key
+EXTRA_PROD += cmd/goruweb/private_domain_key
+
 DEPS = $(shell go list -f '{{ join .Deps "\n" }}' ./cmd/goru)
 FILES = $(shell go list -f $(TPL) ./cmd/goru $(DEPS))
 FILES += $(EXTRA)
@@ -23,16 +31,34 @@ CSVZIP = temp/openrussian.zip
 .PHONY: all
 all: dist/goru dist/goruweb
 
+.PHONY: prod
+prod: dist/goruweb-prod
+
+.PHONY: install
+install: $(FILES) $(FILE_WEB) $(EXTRA_PROD)
+	go install -tags noweb ./cmd/goru
+	go install -tags prod ./cmd/goruweb
+
+dist/goruweb-prod: $(FILES_WEB) $(EXTRA_PROD)
+	go build -o "$@" -tags prod ./cmd/goruweb
+
 dist/goru: $(FILES)
 	go build -tags noweb -o "$@" ./cmd/goru
 
 dist/goruweb: $(FILES_WEB)
 	go build -o "$@" ./cmd/goruweb
 
-.PHONY: install
-install: $(FILES)
-	go install -tags noweb ./cmd/goru
-	go install ./cmd/goruweb
+cmd/goruweb/private.go:
+	cp cmd/goruweb/credentials_private.example "$@"
+
+cmd/goruweb/private_account_key: | dist/keys
+	./dist/keys rsa "$@"
+
+cmd/goruweb/private_domain_key: | dist/keys
+	./dist/keys ecdsa "$@"
+
+dist/keys: $(FILES_KEYS)
+	go build -o "$@" ./cmd/keys
 
 dist/gob: $(GOB_FILES)
 	go build -o "$@" ./cmd/gob

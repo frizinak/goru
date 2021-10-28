@@ -429,13 +429,14 @@ func main() {
 		a                  { color: #ccc; text-decoration: underline; }
 		.scrape            { display: none; }
 		form               { position: relative; }
-		form input, .edits { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
+		form input         { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
 		form .submit       { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
-		.edits             { margin-top: 20px; width: 10; border-color: #600; }
+		.edits             { font-size: 2em; display: inline-block; width: auto; border: 3px #800 solid; padding: 2px 1em; }
+		.edit              { padding: 5px 0; }
 		.edit.h            { display: none; }
-		.edit.a            { background-color: #600; color: #600; }
+		.edit.a            { background-color: #800; color: #800; }
 		.edit.d,
-		.edit.c            { background-color: #600; color: #fff; }
+		.edit.c            { background-color: #800; color: #fff; }
 	</style>
 </head>
 <body>

@@ -49,9 +49,9 @@ func main() {
 	tpl, err := masterTpl.Parse(custom)
 	exit(err)
 
-	results, cyrillic := d.Search(query, all, int(maxResults))
-	if len(results) == 0 && cyrillic {
-		results = d.SearchRussianFuzzy(query, all, int(maxResults))
+	results, _ := d.Search(query, all, int(maxResults))
+	if len(results) == 0 {
+		results, _ = d.SearchFuzzy(query, all, int(maxResults))
 	}
 	if len(results) == 0 {
 		exit(errors.New("no results"))

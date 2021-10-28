@@ -3,6 +3,7 @@ package openrussian
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type ID uint64
@@ -273,21 +274,43 @@ type Translation struct {
 	ExampleTranslation string
 	Info               string
 
+	l              sync.Mutex
 	translationMap map[string]int
 }
 
-func (t *Translation) HasTranslation(qry string) (bool, int) {
-	if t.translationMap == nil {
-		t.translationMap = make(map[string]int)
-		strs := strings.Split(t.Translation, ",")
-		for i, str := range strs {
-			k := strings.ToLower(strings.TrimSpace(str))
-			if _, ok := t.translationMap[k]; ok {
-				continue
-			}
-			t.translationMap[k] = i
-		}
+func (t *Translation) initMap() {
+	if t.translationMap != nil {
+		return
 	}
+	t.l.Lock()
+	if t.translationMap != nil {
+		t.l.Unlock()
+		return
+	}
+
+	t.translationMap = make(map[string]int)
+	strs := strings.Split(t.Translation, ",")
+	for i, str := range strs {
+		k := strings.ToLower(strings.TrimSpace(str))
+		if _, ok := t.translationMap[k]; ok {
+			continue
+		}
+		t.translationMap[k] = i
+	}
+	t.l.Unlock()
+}
+
+func (t *Translation) Words() []string {
+	t.initMap()
+	strs := make([]string, 0, len(t.translationMap))
+	for i := range t.translationMap {
+		strs = append(strs, i)
+	}
+	return strs
+}
+
+func (t *Translation) HasTranslation(qry string) (bool, int) {
+	t.initMap()
 	n, ok := t.translationMap[qry]
 	return ok, n
 }

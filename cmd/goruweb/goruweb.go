@@ -284,11 +284,7 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 
 	const max = 30
 	var res []*openrussian.Word
-	if dict.IsCyrillic(p[1]) {
-		res = dct.SearchRussianFuzzy(p[1], true, max)
-	} else {
-		res = dct.SearchEnglish(p[1], max)
-	}
+	res, cyr := dct.SearchFuzzy(p[1], true, max)
 
 	var audio string
 	if len(res) != 0 && strings.EqualFold(p[1], res[0].Word) {
@@ -299,7 +295,7 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 	xhr := reqw == "fetch" || reqw == "xmlhttprequest"
 
 	var edits dict.Edits
-	if len(res) != 0 {
+	if cyr && len(res) != 0 {
 		q := []rune(p[1])
 		edits = dict.LevenshteinEdits([]rune(res[0].Word), q)
 		if !edits.HasEdits() {
@@ -326,7 +322,10 @@ type WordPage struct {
 func main() {
 	var addr string
 	var cacheDir string
-	flag.StringVar(&addr, "l", ":80", "address to bind to")
+	if !Prod {
+		flag.StringVar(&addr, "l", ":8080", "address to bind to")
+	}
+
 	flag.StringVar(&cacheDir, "c", "", "cache dir, defaults to <XDG default>/goru")
 	flag.Parse()
 
@@ -532,7 +531,7 @@ No results
 	os.MkdirAll(audioCacheDir, 0700)
 	os.MkdirAll(imgCacheDir, 0700)
 
-	l := log.New(os.Stderr, "", log.Ldate|log.Ltime)
+	l := log.New(os.Stderr, "", log.Ltime|log.Lmicroseconds)
 	app := &App{
 		prod: Prod,
 		rate: make(chan struct{}, 3),
@@ -562,5 +561,14 @@ No results
 		s.SetHTTPErrorHandler(i, simplehttp.NewHTTPError("text/html", b))
 	}
 
+	d, err := common.GetDict()
+	if err != nil {
+		l.Fatal(err)
+	}
+	l.Println("loaded dictionary")
+	d.InitEnglishFuzzIndex()
+	l.Println("initialized english index")
+	d.InitRussianFuzzIndex()
+	l.Println("initialized russian index")
 	l.Fatal(run(s, addr))
 }

@@ -7,14 +7,18 @@ import (
 	"github.com/frizinak/goru/openrussian"
 )
 
+type fuzz struct {
+	l       sync.Mutex
+	words   []*openrussian.Word
+	matches []string
+	index   *fuzzy.Index
+}
+
 type Dict struct {
 	w openrussian.Words
 
-	fuzz struct {
-		l     sync.Mutex
-		words []*openrussian.Word
-		index *fuzzy.Index
-	}
+	rfuzz fuzz
+	efuzz fuzz
 }
 
 func New(w openrussian.Words) *Dict {

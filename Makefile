@@ -82,6 +82,7 @@ $(CSVS):
 .PHONY: clean
 clean:
 	rm -f data/data/db.gob
+	rm -f data/data/db.web.gob
 	rm -f data/data/app.js
 	rm -rf dist
 

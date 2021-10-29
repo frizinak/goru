@@ -1,5 +1,6 @@
 /temp/
 /data/data/db.gob
+/data/data/db.web.gob
 /data/data/app.js
 /dist/
 /cmd/goruweb/private*

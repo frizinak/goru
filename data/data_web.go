@@ -24,3 +24,6 @@ var ImgM []byte
 
 //go:embed data/fav.png
 var ImgFav []byte
+
+//go:embed data/db.web.gob
+var Words []byte

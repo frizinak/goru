@@ -7,7 +7,6 @@ import (
 )
 
 type ID uint64
-type Stressed string
 
 type Stress struct {
 	Prefix, Stress, Suffix string
@@ -29,18 +28,36 @@ func (s Stress) String() string {
 
 type StressedSentence []Stress
 
-func (s StressedSentence) String() string {
+func (s StressedSentence) Join(sep string) string {
 	n := make([]string, len(s))
 	for i := range s {
 		n[i] = s[i].String()
 	}
-	return strings.Join(n, " ")
+	return strings.Join(n, sep)
 }
+
+func (s StressedSentence) String() string { return s.Join(" ") }
 
 const (
 	stressMark    = '\u0301'
 	stressMarkAlt = '\u0027'
 )
+
+type Stressed string
+type StressedList []Stressed
+
+func (s Stressed) Unstressed() string {
+	n := []rune(s)
+	for i := 0; i < len(n); i++ {
+		if n[i] == stressMarkAlt || n[i] == stressMark {
+			n = append(n[:i], n[i+1:]...)
+			i--
+		}
+	}
+	return string(n)
+}
+
+func (s Stressed) String() string { return s.Parse().String() }
 
 func (s Stressed) Parse() StressedSentence {
 	f := strings.Fields(string(s))
@@ -82,6 +99,52 @@ func (s Stressed) parse() Stress {
 	return Stress{string(pref), stressStr, string(suff)}
 }
 
+func (s StressedList) String() string {
+	l := make(StressedSentence, 0, len(s))
+	for _, v := range s {
+		l = append(l, v.Parse()...)
+	}
+	return l.Join(", ")
+}
+
+func (s StressedList) Unstressed() string {
+	l := make([]string, len(s))
+	for i, v := range s {
+		l[i] = v.Unstressed()
+	}
+	return strings.Join(l, ", ")
+}
+
+type Aspect uint8
+
+func (g Aspect) String() string { return someAspectsRev[g] }
+
+const (
+	AspectBoth Aspect = 1 + iota
+	Imperfective
+	Perfective
+)
+
+var someAspects = map[string]Aspect{
+	"both":         AspectBoth,
+	"imperfective": Imperfective,
+	"perfective":   Perfective,
+}
+
+var someAspectsRev = map[Aspect]string{
+	AspectBoth:   "both",
+	Imperfective: "imperfective",
+	Perfective:   "perfective",
+}
+
+func aspect(s string) Aspect {
+	s = strings.ToLower(s)
+	if v, ok := someAspects[s]; ok {
+		return v
+	}
+	return 0
+}
+
 type Gender uint8
 
 func (g Gender) String() string { return someGendersRev[g] }
@@ -90,18 +153,21 @@ const (
 	N Gender = 1 + iota
 	F
 	M
+	Pl
 )
 
 var someGenders = map[string]Gender{
-	"n": N,
-	"f": F,
-	"m": M,
+	"n":  N,
+	"f":  F,
+	"m":  M,
+	"pl": Pl,
 }
 
 var someGendersRev = map[Gender]string{
-	N: "neuter",
-	F: "feminine",
-	M: "masculine",
+	N:  "neuter",
+	F:  "feminine",
+	M:  "masculine",
+	Pl: "plural",
 }
 
 func gender(s string) Gender {
@@ -190,46 +256,53 @@ func wordType(s string) WordType {
 	return 0
 }
 
-type CSVWords map[ID]CSVWord
-
-type CSVWord struct {
-	ID            ID
-	Position      uint64
-	Word          string
-	Stressed      Stressed
-	DerivedFrom   ID
-	Rank          uint64
-	Usage         string
-	WordType      WordType
-	LanguageLevel LanguageLevel
+type Declension struct {
+	Nom  StressedList
+	Gen  StressedList
+	Dat  StressedList
+	Acc  StressedList
+	Inst StressedList
+	Prep StressedList
 }
 
-type CSVTranslations map[ID]CSVTranslation
-
-type CSVTranslation struct {
-	ID                 ID
-	Word               ID
-	Translation        string
-	Example            string
-	ExampleTranslation string
-	Info               string
+type AdjGenderInfo struct {
+	Gender Gender
+	Short  StressedList
+	Decl   *Declension
 }
 
-type CSVNouns map[ID]CSVNoun
+type AdjInfo struct {
+	Comparative StressedList
+	Superlative StressedList
 
-type CSVNoun struct {
-	ID                  ID
-	Gender              Gender
-	SingularOnly        bool
-	PluralOnly          bool
-	DeclinationSingular ID
-	DeclinationPlural   ID
+	F, M, N, Pl *AdjGenderInfo
 }
 
 type NounInfo struct {
 	Gender       Gender
 	SingularOnly bool
 	PluralOnly   bool
+}
+
+type Conjugation struct {
+	Sg1, Sg2, Sg3, Pl1, Pl2, Pl3 Stressed
+}
+
+type VerbInfo struct {
+	Aspect Aspect
+
+	ImperativeSg Stressed
+	ImperativePl Stressed
+	PastM        Stressed
+	PastF        Stressed
+	PastN        Stressed
+	PastPl       Stressed
+
+	Conjugation    *Conjugation
+	ActivePresent  *Word
+	ActivePast     *Word
+	PassivePresent *Word
+	PassivePast    *Word
 }
 
 type Words map[ID]*Word
@@ -245,6 +318,8 @@ type Word struct {
 	WordType      WordType
 	LanguageLevel LanguageLevel
 	NounInfo      *NounInfo
+	AdjInfo       *AdjInfo
+	VerbInfo      *VerbInfo
 }
 
 func (w *Word) HasTranslation(qry string) (bool, int) {

@@ -69,11 +69,8 @@ func (index *Index) parts(q string) []string {
 	p := strings.Fields(
 		strings.Trim(strings.TrimSpace(strings.ToLower(q)), "!@#$%^&*=./,"),
 	)
-	//dupes := make(map[string]struct{})
 	add := func(s string) {
-		//if _, ok := dupes[s]; !ok {
 		qs = append(qs, s)
-		//}
 	}
 	for i := range p {
 		v := []rune(p[i])

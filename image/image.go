@@ -29,27 +29,40 @@ func face(b []byte, size float64) (font.Face, error) {
 	return cursiveface, err
 }
 
-func Image(height int, word string, fg, bg color.NRGBA) (*image.NRGBA, error) {
+func Image(height int, normal, cursive string, margins bool, fg, bg color.NRGBA) (*image.NRGBA, error) {
 	startX := height / 8
 	stopX := height / 8
 	startY := height / 8
 	stopY := height / 8
 	padding := height / 8
+	if normal == "" || cursive == "" {
+		startY /= 2
+		stopY /= 2
+		padding = 0
+	}
+
+	if !margins {
+		startY, stopY = 0, 0
+	}
+
 	rest := height - startY - padding - stopY
 	if rest < 0 {
 		rest = 0
 	}
-	fsize := float64((rest / 3))
+	fsize := float64(rest) * 0.4
+	if normal == "" || cursive == "" {
+		fsize = float64(rest) * 0.75
+	}
 	img := image.NewNRGBA(image.Rect(0, 0, 0, 0))
 
 	cursiveSize := fsize
 	printSize := fsize
-	cursive, err := face(data.FontLobster, cursiveSize)
+	fcursive, err := face(data.FontLobster, cursiveSize)
 	if err != nil {
 		return nil, err
 	}
 
-	print, err := face(data.FontOpenSans, printSize)
+	fprint, err := face(data.FontOpenSans, printSize)
 	if err != nil {
 		return nil, err
 	}
@@ -59,16 +72,28 @@ func Image(height int, word string, fg, bg color.NRGBA) (*image.NRGBA, error) {
 		dwr := font.Drawer{
 			Dst:  img,
 			Src:  fontLSrc,
-			Face: print,
+			Face: fprint,
 		}
 
-		dwr.Dot = fixed.P(startX1, startY+int(cursiveSize))
-		dwr.DrawString(word)
+		if normal != "" {
+			y := startY + int(printSize)
+			if cursive == "" {
+				y = height/2 + int(printSize/3)
+			}
+			dwr.Dot = fixed.P(startX1, y)
+			dwr.DrawString(normal)
+		}
 		width1 := int(dwr.Dot.X>>6) - startX
 
-		dwr.Face = cursive
-		dwr.Dot = fixed.P(startX2, startY+padding+int(cursiveSize)+int(printSize))
-		dwr.DrawString(word)
+		if cursive != "" {
+			dwr.Face = fcursive
+			y := startY + padding + int(cursiveSize) + int(printSize)
+			if normal == "" {
+				y = height/2 + int(cursiveSize/3)
+			}
+			dwr.Dot = fixed.P(startX2, y)
+			dwr.DrawString(cursive)
+		}
 		width2 := int(dwr.Dot.X>>6) - startX
 		return width1, width2
 	}

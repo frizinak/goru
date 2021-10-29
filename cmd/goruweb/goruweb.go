@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,6 +44,7 @@ type App struct {
 	conf         Config
 	homeTpl      *template.Template
 	wordsTpl     *template.Template
+	wordTpl      *template.Template
 	resultsTpl   *template.Template
 	scrapableTpl *template.Template
 }
@@ -88,21 +91,43 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 	switch {
 	case strings.HasPrefix(p, "w/") && strings.Count(p, "/") == 1:
 		return app.ratelimit(app.handleWord), 0
+	case strings.HasPrefix(p, "w/i/") && strings.Count(p, "/") == 2:
+		return app.handleWordInfo, 0
 	case strings.HasPrefix(p, "a/") && strings.Count(p, "/") == 2:
 		return app.handleAudio, 0
+	case strings.HasPrefix(p, "aa/") && strings.Count(p, "/") == 2:
+		return app.handleArbitaryAudio, 0
 	case strings.HasPrefix(p, "i/") && strings.Count(p, "/") == 1:
 		return app.handleImg, 0
-	case strings.HasPrefix(p, "asset/") && strings.Count(p, "/") == 1:
+	case strings.HasPrefix(p, "ai/") && strings.Count(p, "/") == 2:
+		return app.handleArbitaryImg, 0
+	case strings.HasPrefix(p, "f/") && strings.Count(p, "/") == 1:
 		return app.handleAsset, 0
 	}
 
 	return nil, 0
 }
 
-func absWord(w *openrussian.Word) string  { return fmt.Sprintf("/w/%s", w.Word) }
-func absImg(w *openrussian.Word) string   { return fmt.Sprintf("/i/%d.png", w.ID) }
-func absAudio(w *openrussian.Word) string { return fmt.Sprintf("/a/%d/%s", w.ID, w.Word) }
-func absArbitraryAudio(w string) string   { return fmt.Sprintf("/aa//%s", w) }
+var b64e = base64.NewEncoding(Base64Chars).WithPadding(base64.NoPadding)
+
+func absWord(w *openrussian.Word) string     { return fmt.Sprintf("/w/%s", w.Word) }
+func absWordInfo(w *openrussian.Word) string { return fmt.Sprintf("/w/i/%d", w.ID) }
+func absImg(w *openrussian.Word) string      { return fmt.Sprintf("/i/%d.png", w.ID) }
+func absAudio(w *openrussian.Word) string    { return fmt.Sprintf("/a/%d/%s", w.ID, w.Word) }
+
+func sign(data string) string {
+	s1 := sha256.New()
+	s1.Write([]byte(data))
+	s1.Write(URLSigSalt)
+	buf := s1.Sum(make([]byte, 0, 64))
+	s2 := sha256.New()
+	s2.Write(buf)
+	buf = s2.Sum(buf)
+	return b64e.EncodeToString(buf[32:])
+}
+
+func absArbitraryAudio(w string) string { return fmt.Sprintf("/aa/%s/%s", sign(w), w) }
+func absArbitraryImg(w string) string   { return fmt.Sprintf("/ai/%s/%s.png", sign(w), w) }
 
 func (app *App) cache(path string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
 	f, err := os.Open(path)
@@ -139,7 +164,25 @@ func (app *App) img(word *openrussian.Word, w io.Writer) (int64, error) {
 
 	fp := filepath.Join(app.conf.ImageCacheDir, strconv.Itoa(int(word.ID)))
 	return app.cache(fp, w, func(w io.Writer) (int64, error) {
-		img, err := image.Image(300, word.Stressed.Parse().String(), imgFG, imgBG)
+		str := word.Stressed.Parse().String()
+		img, err := image.Image(300, str, str, false, imgFG, imgBG)
+		if err != nil {
+			return 0, err
+		}
+
+		return -1, png.Encode(w, img)
+	})
+}
+
+func (app *App) arbimg(word string, w io.Writer) (int64, error) {
+	if len(word) == 0 {
+		return 0, errors.New("nil word")
+	}
+
+	fn := fmt.Sprintf("ai-%s", sign(word))
+	fp := filepath.Join(app.conf.ImageCacheDir, fn)
+	return app.cache(fp, w, func(w io.Writer) (int64, error) {
+		img, err := image.Image(150, "", word, false, imgFG, imgBG)
 		if err != nil {
 			return 0, err
 		}
@@ -156,6 +199,24 @@ func (app *App) audio(word *openrussian.Word, w io.Writer) (int64, error) {
 	fp := filepath.Join(app.conf.AudioCacheDir, strconv.Itoa(int(word.ID)))
 	return app.cache(fp, w, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word.Word)
+		res, err := http.Get(uri)
+		if err != nil {
+			return 0, err
+		}
+		defer res.Body.Close()
+		return io.Copy(w, res.Body)
+	})
+}
+
+func (app *App) arbaudio(word string, w io.Writer) (int64, error) {
+	if len(word) == 0 {
+		return 0, errors.New("nil word")
+	}
+
+	fn := fmt.Sprintf("aa-%s", sign(word))
+	fp := filepath.Join(app.conf.AudioCacheDir, fn)
+	return app.cache(fp, w, func(w io.Writer) (int64, error) {
+		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word)
 		res, err := http.Get(uri)
 		if err != nil {
 			return 0, err
@@ -220,6 +281,21 @@ func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logge
 	return 0, err
 }
 
+func (app *App) handleArbitaryAudio(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+	p := strings.SplitN(r.URL.Path, "/", 3)
+	s := p[1]
+	rawstr := p[2]
+	if sign(rawstr) != s {
+		return http.StatusNotAcceptable, nil
+	}
+	h := w.Header()
+	h.Set("content-type", "audio/mpeg")
+	h.Set("cache-control", "max-age=86400")
+	_, err := app.arbaudio(rawstr, w)
+
+	return 0, err
+}
+
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
 	dict, err := common.GetDict()
 	if err != nil {
@@ -246,6 +322,25 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request, l *log.Logger
 	// 	words = append(words, w)
 	// }
 	// return 0, app.scrapableTpl.Execute(w, WordPage{Words: words})
+}
+
+func (app *App) handleArbitaryImg(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+	p := strings.SplitN(r.URL.Path, "/", 3)
+	if !strings.HasSuffix(p[2], ".png") {
+		return http.StatusNotFound, nil
+	}
+	s := p[1]
+	rawstr := p[2][:len(p[2])-4]
+	if sign(rawstr) != s {
+		return http.StatusNotAcceptable, nil
+	}
+	str := openrussian.SplitStressed(rawstr)
+	h := w.Header()
+	h.Set("content-type", "image/png")
+	h.Set("cache-control", "max-age=86400")
+	_, err := app.arbimg(str.String(), w)
+
+	return 0, err
 }
 
 func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
@@ -312,6 +407,27 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 	return 0, app.wordsTpl.Execute(w, d)
 }
 
+func (app *App) handleWordInfo(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+	p := strings.SplitN(r.URL.Path, "/", 3)
+	id, err := strconv.Atoi(p[2])
+	if err != nil {
+		return http.StatusNotFound, nil
+	}
+
+	dct, err := common.GetDict()
+	if err != nil {
+		return 0, err
+	}
+	word := dct.Words()[openrussian.ID(id)]
+	if word == nil {
+		return http.StatusNotFound, nil
+	}
+
+	d := WordPage{Query: word.Word, Edits: nil, Audio: "", Words: []*openrussian.Word{word}}
+	w.Header().Set("content-type", "text/html")
+	return 0, app.wordTpl.Execute(w, d)
+}
+
 type WordPage struct {
 	Query string
 	Edits dict.Edits
@@ -329,6 +445,8 @@ func main() {
 	flag.StringVar(&cacheDir, "c", "", "cache dir, defaults to <XDG default>/goru")
 	flag.Parse()
 
+	l := log.New(os.Stderr, "", log.Ltime|log.Lmicroseconds)
+	l.Println("initializing")
 	if cacheDir == "" {
 		_cacheDir, err := os.UserCacheDir()
 		if err != nil {
@@ -342,6 +460,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	nonl := func(i string) string { return strings.ReplaceAll(strings.ReplaceAll(i, "\n", ""), "\t", "") }
 
 	tpl := template.Must(mtpl.Funcs(template.FuncMap{
 		"editType": func(t dict.EditType) string {
@@ -357,38 +477,128 @@ func main() {
 			}
 			return "h"
 		},
-		"absWord":  absWord,
-		"absImg":   absImg,
-		"absAudio": absAudio,
-		"genderImg": func(gender openrussian.Gender) string {
-			switch gender {
-			case openrussian.N:
-				return "/asset/n.png"
-			case openrussian.F:
-				return "/asset/f.png"
-			case openrussian.M:
-				return "/asset/m.png"
-			default:
-				return ""
+		"absArbitraryImg":   absArbitraryImg,
+		"absArbitraryAudio": absArbitraryAudio,
+		"absWord":           absWord,
+		"absWordInfo":       absWordInfo,
+		"absImg":            absImg,
+		"absAudio":          absAudio,
+		"genderImg": func(gender interface{}) string {
+			if g, ok := gender.(openrussian.Gender); ok {
+				switch g {
+				case openrussian.N:
+					return "/f/n.png"
+				case openrussian.F:
+					return "/f/f.png"
+				case openrussian.M:
+					return "/f/m.png"
+				case openrussian.Pl:
+					return "/f/pl.png"
+				default:
+					return ""
+				}
 			}
+
+			return fmt.Sprintf("/f/%s.png", gender.(string))
 		},
-	}).Parse(
-		`{{- define "trans" -}}
+	}).Parse(nonl(`{{- define "trans" -}}
 <div>{{ .Translation }}</div>
-{{ if .Info }}<div>{{ .Info }}</div>{{ end }}
+{{- if .Info }}<div>{{ .Info }}</div>{{ end -}}
 {{- if .Example -}}
 <div>
 	<p>{{ .Example -}}</p>
-	{{ if .ExampleTranslation }}<p>{{ .ExampleTranslation}}</p>{{ end }}
+	{{ if .ExampleTranslation }}<p>{{ .ExampleTranslation}}</p>{{ end -}}
 </div>
 {{- end -}}
 {{- end -}}
 
-{{- define "gender" -}}{{ with genderImg . }}<img src="{{ . }}"/>{{ end }}{{- end -}}
+{{- define "gender" -}}{{ with genderImg . }}<img class="gender" src="{{ . }}"/>{{ end }}{{- end -}}
+
+{{- define "arb-img" -}}
+<td class="img-container">
+{{- if . -}}
+<a class="img" href="#"><img src="{{ absArbitraryImg .String }}"/></a>
+<audio controls>
+<source src="{{ absArbitraryAudio .Unstressed }}" type="audio/mpeg">
+</audio>
+{{- end -}}
+</td>
+{{- end -}}
+
+{{- define "arb-img-word" -}}
+<td class="img-container">{{ if . }}{{ if .Stressed }}{{- template "arb-img" .Stressed -}}{{ end }}{{ end }}</td>
+{{- end -}}
+
+{{- define "word-info" -}}
+<div class="meta">
+{{- with .AdjInfo -}}
+	<table class="adj">
+		{{- with .Comparative -}}
+		<tr><td>Comparative</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>
+		{{- end -}}
+		{{- with .Superlative -}}
+		<tr><td>Superlative</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>
+		{{- end -}}
+		<tr><td></td><td></td></tr>
+		{{ with .F }}{{ template "adj-gender-info" . }}{{ end -}}
+		<tr><td></td><td></td></tr>
+		{{ with .M }}{{ template "adj-gender-info" . }}{{ end -}}
+		<tr><td></td><td></td></tr>
+		{{ with .N }}{{ template "adj-gender-info" . }}{{ end -}}
+		<tr><td></td><td></td></tr>
+		{{ with .Pl }}{{ template "adj-gender-info" . }}{{ end -}}
+	</table>
+{{- end -}}
+{{- with .VerbInfo -}}
+	<table class="verb">
+	{{- with .Conjugation -}}
+		<tr><td>я</td><td>{{ .Sg1.Unstressed }}</td>{{ template "arb-img" .Sg1 }}</td>
+		<tr><td>ты</td><td>{{ .Sg2.Unstressed }}</td>{{ template "arb-img" .Sg2 }}</td>
+		<tr><td>он/она/оно</td><td>{{ .Sg3.Unstressed }}</td>{{ template "arb-img" .Sg3 }}</td>
+		<tr><td>мы</td><td>{{ .Pl1.Unstressed }}</td>{{ template "arb-img" .Pl1 }}</td>
+		<tr><td>вы</td><td>{{ .Pl2.Unstressed }}</td>{{ template "arb-img" .Pl2 }}</td>
+		<tr><td>они</td><td>{{ .Pl3.Unstressed }}</td>{{ template "arb-img" .Pl3 }}</td>
+		<tr><td></td><td></td></tr>
+	{{ end -}}
+		<tr><td>Aspect</td><td>{{ .Aspect }}</td></tr>
+		{{- with .ImperativeSg }}<tr><td>Imperative (singular)</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		{{- with .ImperativePl }}<tr><td>Imperative (plural)</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		<tr><td></td><td></td></tr>
+		{{- with .PastF }}<tr><td>past {{ template "gender" "f" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		{{- with .PastM }}<tr><td>past {{ template "gender" "m" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		{{- with .PastN }}<tr><td>past {{ template "gender" "n" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		{{- with .PastPl }}<tr><td>past {{ template "gender" "pl" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+		<tr><td></td><td></td></tr>
+		<tr><td>Active present</td><td>{{ with .ActivePresent }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .ActivePresent }}</tr>
+		<tr><td>Active past</td><td>{{ with .ActivePast }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .ActivePast }}</tr>
+		<tr><td>Passive present</td><td>{{ with .PassivePresent }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .PassivePresent }}</tr>
+		<tr><td>Passive past</td><td>{{ with .PassivePast }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .PassivePast }}</tr>
+		<tr><td></td><td></td></tr>
+	</table>
+{{- end -}}
+</div>
+{{- end -}}
+
+{{- define "adj-gender-info" -}}
+<tr><td class="title">{{ template "gender" .Gender }}</td><td></td></tr>
+{{- with .Short }}<tr><td>stem</td><td>{{ .Unstressed }}</td></tr>{{ end -}}
+{{- with .Decl -}}
+	{{- with .Nom }}<tr><td>nom</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+	{{- with .Gen }}<tr><td>gen</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+	{{- with .Dat }}<tr><td>dat</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+	{{- with .Acc }}<tr><td>acc</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+	{{- with .Inst }}<tr><td>inst</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+	{{- with .Prep }}<tr><td>prep</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
+{{- end -}}
+{{- end -}}
 
 {{- define "word" -}}
 <td class="smol">
+{{- if or .AdjInfo .VerbInfo -}}
+<a href="{{ absWordInfo . }}">{{- template "wordStr" . -}}</a>
+{{- else -}}
 {{- template "wordStr" . -}}
+{{- end -}}
 <div class="scrape">
 <a href="{{ absImg . }}">img</a>
 <a href="{{ absAudio . }}">audio</a>
@@ -398,7 +608,7 @@ func main() {
 </audio>
 </td>
 <td class="img-container"><a class="img" href="#"><img src="{{ absImg . }}"/></a></td>
-<td class="smol gender">
+<td class="smol">
 {{- if .NounInfo }} {{ template "gender" .NounInfo.Gender }}{{ end -}}
 </td>
 <td class="smol">
@@ -418,7 +628,7 @@ func main() {
 <a class="c-normal copy" href="#">copy</a>
 {{- if ne .Word .Stressed -}}
 <a class="c-stressed copy" href="#">copy stressed</a>
-{{- end }}
+{{- end -}}
 </td>
 {{- end -}}
 
@@ -432,35 +642,43 @@ func main() {
 <head>
 	<meta charset="utf-8">
 	<title>{{ . }}</title>
-	<link rel="shortcut icon" type="image/png" href="/asset/fav.png"/>
+	<link rel="shortcut icon" type="image/png" href="/f/fav.png"/>
 	<style>
-		*                  { padding: 0; margin: 0; box-sizing: border-box; }
-		html, body         { background-color: #151515; color: #fff; }
-		main               { max-width: 1400px; width: 95%; margin: 0 auto 0 auto; margin-top: 20px; }
-		.gender img        { width: 25px; height: auto; }
-		.stressed          { display: none; }
-		.copy              { display: block; transition: color 500ms; }
-		.copy.copied       { color: #afa; }
-		.copy.error        { color: #faa; }
-		.results table     { width: 100%; }
-		.results           { margin-top: 40px; }
-		td                 { padding: 20px; width: 20%; }
-		td.smol            { width: 5%; }
-		td.smollish        { width: 10%; }
-		td.img-container   { text-align: center; }
-		img                { height: 150px; width: auto; }
-		audio              { display: none; }
-		a                  { color: #ccc; text-decoration: underline; }
-		.scrape            { display: none; }
-		form               { position: relative; }
-		form input         { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
-		form .submit       { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
-		.edits             { font-size: 2em; display: inline-block; width: auto; border: 3px #800 solid; padding: 2px 1em; }
-		.edit              { padding: 5px 0; }
-		.edit.h            { display: none; }
-		.edit.a            { background-color: #800; color: #800; }
+		*                      { padding: 0; margin: 0; box-sizing: border-box; }
+		html, body             { background-color: #151515; color: #fff; }
+		main                   { max-width: 1400px; width: 95%; margin: 0 auto 50px auto; margin-top: 20px; }
+		img.gender             { width: 25px; height: auto; }
+		.stressed              { display: none; }
+		.copy                  { display: block; transition: color 500ms; }
+		.copy.copied           { color: #afa; }
+		.copy.error            { color: #faa; }
+		.main-table            { width: 100%; }
+		.results               { margin-top: 40px; }
+		td                     { padding: 20px; width: 20%; }
+		td.smol                { width: 5%; }
+		td.smollish            { width: 10%; }
+		td.img-container       { text-align: center; }
+		img                    { height: 150px; width: auto; }
+		audio                  { display: none; }
+		a                      { color: #ccc; text-decoration: underline; }
+		.scrape                { display: none; }
+		form                   { position: relative; }
+		form input             { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
+		form .submit           { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
+		.edits                 { font-size: 2em; display: inline-block; width: auto; border: 3px #800 solid; padding: 2px 1em; }
+		.edit                  { padding: 5px 0; }
+		.edit.h                { display: none; }
+		.edit.a                { background-color: #800; color: #800; }
 		.edit.d,
-		.edit.c            { background-color: #800; color: #fff; }
+		.edit.c                { background-color: #800; color: #fff; }
+		.meta                  { margin-left: 20px; }
+		.meta table            { margin-top: 2em;  }
+		.meta .gender          { width: 16px; }
+		.meta td:first-child   {  }
+		.meta td               { width: auto; height: 2em; padding: 0 20px 0 0; }
+		.meta td.img-container img { max-height: 150%; width: auto; }
+		img                    { image-rendering: crisp-edges; }
+		}
 	</style>
 </head>
 <body>
@@ -474,25 +692,25 @@ func main() {
 {{- end -}}
 
 {{- define "results" -}}
-{{ with .Edits }}
+{{- with .Edits -}}
 <div class="edits"/>
-{{ range . -}}
+{{- range . -}}
 <span class="edit {{ editType .Type }}">{{ . }}</span>
-{{- end }}
+{{- end -}}
 </div>
-{{ end }}
-{{ if .Words -}}
-<table>
-{{- range .Words }}
+{{- end -}}
+{{- if .Words -}}
+<table class="main-table">
+{{- range .Words -}}
 <tr>{{ template "word" . }}</tr>
-{{ end -}}
+{{- end -}}
 </table>
-{{ else -}}
+{{- else -}}
 No results
-{{ end -}}
+{{- end -}}
 {{- end -}}
 
-{{ template "header" "GoRussian" }}
+{{- define "main" -}}
 <div class="input">
 <form>
 <input type="text"   class="val"    value="{{ .Query }}" placeholder="Слово | Word" />
@@ -500,38 +718,47 @@ No results
 </form>
 </div>
 <div class="results">
-{{ template "results" . }}
+{{- template "results" . -}}
 </div>
-<script>` + data.AppJS + `</script>
-{{ template "footer" }}`,
+{{- end -}}
+
+{{- define "js" -}}<script>`) + data.AppJS + nonl(`</script>{{- end -}}
+{{- template "header" "GoRussian" -}}
+{{- template "main" . -}}
+{{- template "js" -}}
+{{- template "footer" }}`),
 	))
 
 	homeTpl := template.Must(tpl.New("home").Parse(`
-{{- template "header" . }}
+{{- template "header" . -}}
 <a href="/w/Здравствуйте"><h1>Здравствуйте</h1></a>
-{{ template "footer" }}`))
+{{- template "footer" }}`))
 
 	scrapableTpl := template.Must(template.Must(tpl.Clone()).Parse(`
 {{- define "word" -}}
 <a href="{{ absWord . }}">w</a>
-{{- end -}}
-`))
+{{- end -}}`))
 
 	errTpl := template.Must(tpl.New("err").Parse(`
-{{- template "header" "Error" }}
-	{{ . }}
-{{ template "footer" }}`))
+{{- template "header" "Error" -}}
+	{{ . -}}
+{{- template "footer" }}`))
 
 	resultsTpl := template.Must(tpl.New("xhr").Parse(`
-{{- template "results" . -}}
-`))
+{{- template "results" . -}}`))
+
+	wordInfoTpl := template.Must(tpl.New("info").Parse(`
+{{- template "header" (index .Words 0) -}}
+{{- template "main" . -}}
+{{- template "word-info" (index .Words 0) -}}
+{{- template "js" . -}}
+{{- template "footer" }}`))
 
 	audioCacheDir := filepath.Join(cacheDir, "audio")
 	imgCacheDir := filepath.Join(cacheDir, "img")
 	os.MkdirAll(audioCacheDir, 0700)
 	os.MkdirAll(imgCacheDir, 0700)
 
-	l := log.New(os.Stderr, "", log.Ltime|log.Lmicroseconds)
 	app := &App{
 		prod: Prod,
 		rate: make(chan struct{}, 3),
@@ -540,6 +767,7 @@ No results
 			ImageCacheDir: imgCacheDir,
 		},
 		wordsTpl:     tpl,
+		wordTpl:      wordInfoTpl,
 		homeTpl:      homeTpl,
 		scrapableTpl: scrapableTpl,
 		resultsTpl:   resultsTpl,

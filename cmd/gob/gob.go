@@ -11,6 +11,10 @@ func main() {
 	var words openrussian.CSVWords
 	var trans openrussian.CSVTranslations
 	var nouns openrussian.CSVNouns
+	var adj openrussian.CSVAdjectives
+	var decl openrussian.CSVDeclensions
+	var verbs openrussian.CSVVerbs
+	var conjs openrussian.CSVConjugations
 
 	x := []struct {
 		f  string
@@ -40,9 +44,43 @@ func main() {
 				return err
 			},
 		},
+		{
+			f: "temp/adjectives.csv",
+			cb: func(r io.Reader) error {
+				var err error
+				adj, err = openrussian.DecodeAdjectives(r)
+				return err
+			},
+		},
+		{
+			f: "temp/declensions.csv",
+			cb: func(r io.Reader) error {
+				var err error
+				decl, err = openrussian.DecodeDeclensions(r)
+				return err
+			},
+		},
+		{
+			f: "temp/verbs.csv",
+			cb: func(r io.Reader) error {
+				var err error
+				verbs, err = openrussian.DecodeVerbs(r)
+				return err
+			},
+		},
+		{
+			f: "temp/conjugations.csv",
+			cb: func(r io.Reader) error {
+				var err error
+				conjs, err = openrussian.DecodeConjugations(r)
+				return err
+			},
+		},
 	}
 
 	gob := "data/data/db.gob"
+	gobweb := "data/data/db.web.gob"
+
 	os.MkdirAll("data/data", 0700)
 	for _, d := range x {
 		func() {
@@ -57,8 +95,13 @@ func main() {
 		}()
 	}
 
-	all := openrussian.Merge(words, trans, nouns)
+	all := openrussian.Merge(words, trans, nouns, nil, nil, nil, nil)
 	if err := openrussian.StoreGOB(gob, all); err != nil {
+		panic(err)
+	}
+
+	all = openrussian.Merge(words, trans, nouns, adj, decl, verbs, conjs)
+	if err := openrussian.StoreGOB(gobweb, all); err != nil {
 		panic(err)
 	}
 }

@@ -22,6 +22,9 @@ var ImgF []byte
 //go:embed data/m.png
 var ImgM []byte
 
+//go:embed data/pl.png
+var ImgPl []byte
+
 //go:embed data/fav.png
 var ImgFav []byte
 

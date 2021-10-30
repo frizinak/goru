@@ -12,35 +12,42 @@ type Stress struct {
 	Prefix, Stress, Suffix string
 }
 
-func (s Stress) String() string {
+func (s Stress) StringMark(mark string) string {
 	if s.Stress == "" {
 		return s.Prefix
 	}
 	d := []string{
 		s.Prefix,
 		s.Stress,
-		string(stressMark),
+		mark,
 		s.Suffix,
 	}
 
 	return strings.Join(d, "")
 }
 
+func (s Stress) String() string {
+	return s.StringMark(string(stressMark))
+}
+
 type StressedSentence []Stress
 
-func (s StressedSentence) Join(sep string) string {
+func (s StressedSentence) Join(sep string, mark string) string {
 	n := make([]string, len(s))
 	for i := range s {
-		n[i] = s[i].String()
+		n[i] = s[i].StringMark(mark)
 	}
 	return strings.Join(n, sep)
 }
 
-func (s StressedSentence) String() string { return s.Join(" ") }
+func (s StressedSentence) String() string    { return s.Join(" ", sstressMark) }
+func (s StressedSentence) StringAlt() string { return s.Join(" ", sstressMarkAlt) }
 
 const (
-	stressMark    = '\u0301'
-	stressMarkAlt = '\u0027'
+	stressMark     = '\u0301'
+	stressMarkAlt  = '\u0027'
+	sstressMark    = string(stressMark)
+	sstressMarkAlt = string(stressMarkAlt)
 )
 
 type Stressed string
@@ -104,7 +111,7 @@ func (s StressedList) String() string {
 	for _, v := range s {
 		l = append(l, v.Parse()...)
 	}
-	return l.Join(", ")
+	return l.Join(", ", sstressMark)
 }
 
 func (s StressedList) Unstressed() string {

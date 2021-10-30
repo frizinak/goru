@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,8 +37,10 @@ var (
 )
 
 type Config struct {
-	AudioCacheDir string
-	ImageCacheDir string
+	AudioCacheDir          string
+	ImageCacheDir          string
+	ArbitraryAudioCacheDir string
+	ArbitraryImageCacheDir string
 }
 
 type App struct {
@@ -170,10 +173,10 @@ func absWordInfo(w *openrussian.Word) string { return fmt.Sprintf("/w/i/%d", w.I
 func absImg(w *openrussian.Word) string      { return fmt.Sprintf("/i/%d.png", w.ID) }
 func absAudio(w *openrussian.Word) string    { return fmt.Sprintf("/a/%d/%s", w.ID, esc(w.Word)) }
 
-func hash(data string) string {
+func fnhash(data string) string {
 	s1 := sha256.New()
 	s1.Write([]byte(data))
-	return base64.RawURLEncoding.EncodeToString(s1.Sum(nil))
+	return hex.EncodeToString(s1.Sum(nil))
 }
 
 func sign(data string) string {
@@ -191,7 +194,7 @@ func absArbitraryAudio(w string) string { return fmt.Sprintf("/aa/%s/%s", sign(w
 func absArbitraryImg(w string) string   { return fmt.Sprintf("/ai/%s/%s.png", sign(w), esc(w)) }
 
 func (app *App) cache(dir, name string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
-	hn := hash(name)
+	hn := fnhash(name)
 	fulldir := filepath.Join(dir, hn[0:2], hn[2:4])
 	path := filepath.Join(fulldir, hn[4:])
 	f, err := os.Open(path)
@@ -247,7 +250,7 @@ func (app *App) arbimg(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.ImageCacheDir, word, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ArbitraryImageCacheDir, word, w, func(w io.Writer) (int64, error) {
 		img, err := image.Image(40, "", word, false, imgFG, imgBG)
 		if err != nil {
 			return 0, err
@@ -278,7 +281,7 @@ func (app *App) arbaudio(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.AudioCacheDir, word, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ArbitraryAudioCacheDir, word, w, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word)
 		res, err := http.Get(uri)
 		if err != nil {
@@ -626,15 +629,21 @@ func main() {
 
 	audioCacheDir := filepath.Join(cacheDir, "audio")
 	imgCacheDir := filepath.Join(cacheDir, "img")
+	arbitAudioCacheDir := filepath.Join(cacheDir, "audio-volatile")
+	arbitImgCacheDir := filepath.Join(cacheDir, "img-volatile")
 	os.MkdirAll(audioCacheDir, 0700)
 	os.MkdirAll(imgCacheDir, 0700)
+	os.MkdirAll(arbitAudioCacheDir, 0700)
+	os.MkdirAll(arbitImgCacheDir, 0700)
 
 	app := &App{
 		prod: Prod,
-		rate: make(chan struct{}, 100000),
+		rate: make(chan struct{}, 3),
 		conf: Config{
-			AudioCacheDir: audioCacheDir,
-			ImageCacheDir: imgCacheDir,
+			AudioCacheDir:          audioCacheDir,
+			ImageCacheDir:          imgCacheDir,
+			ArbitraryAudioCacheDir: arbitAudioCacheDir,
+			ArbitraryImageCacheDir: arbitImgCacheDir,
 		},
 		wordsTpl:     tpl,
 		wordTpl:      wordInfoTpl,

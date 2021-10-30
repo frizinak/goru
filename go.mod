@@ -3,7 +3,7 @@ module github.com/frizinak/goru
 go 1.17
 
 require (
-	github.com/frizinak/gotls v0.2.0
+	github.com/frizinak/gotls v0.2.1
 	github.com/tdewolff/minify/v2 v2.9.22
 	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d
 )

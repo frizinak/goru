@@ -3,8 +3,8 @@ github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/djherbis/atime v1.1.0/go.mod h1:28OF6Y8s3NQWwacXc5eZTsEsiMzp7LF8MbXE+XJPdBE=
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
-github.com/frizinak/gotls v0.2.0 h1:a5Jn8aL09QxtS1OGhYSWL1X9Wed4xRvkwviB/3xoJvQ=
-github.com/frizinak/gotls v0.2.0/go.mod h1:IjV6nBt0x4yRnu20Pm6n5ohMwIWlj/auEVymbtQ/FPc=
+github.com/frizinak/gotls v0.2.1 h1:QG0j0yIiUfokDrAVyKuWr2oXDc187AjPQQAkAu2zjVs=
+github.com/frizinak/gotls v0.2.1/go.mod h1:IjV6nBt0x4yRnu20Pm6n5ohMwIWlj/auEVymbtQ/FPc=
 github.com/fsnotify/fsnotify v1.5.1/go.mod h1:T3375wBYaZdLLcVNkcVbzGHY7f1l/uK5T5Ai1i3InKU=
 github.com/google/go-cmp v0.5.6 h1:BKbKCqvP6I+rmFHt06ZmyQtvB8xAkWdhFyr0ZUNZcxQ=
 github.com/google/go-cmp v0.5.6/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=

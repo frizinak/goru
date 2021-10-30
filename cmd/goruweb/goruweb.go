@@ -13,10 +13,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/frizinak/goru/common"
@@ -47,6 +49,11 @@ type App struct {
 	wordTpl      *template.Template
 	resultsTpl   *template.Template
 	scrapableTpl *template.Template
+
+	scrape struct {
+		l     sync.Mutex
+		words []*openrussian.Word
+	}
 }
 
 func (app *App) ratelimit(h simplehttp.HandleFunc) simplehttp.HandleFunc {
@@ -58,7 +65,49 @@ func (app *App) ratelimit(h simplehttp.HandleFunc) simplehttp.HandleFunc {
 	}
 }
 
+func slash(r rune) bool { return r == '/' }
+
+type uri struct {
+	raw     string
+	correct string
+	parts   []string
+}
+
+func parse(u *url.URL) (*uri, error) {
+	raw := u.EscapedPath()
+	parts := strings.FieldsFunc(strings.TrimFunc(raw, slash), slash)
+	correct := "/" + strings.Join(parts, "/")
+	var err error
+	for i, v := range parts {
+		parts[i], err = url.PathUnescape(v)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &uri{raw: raw, correct: correct, parts: parts}, nil
+}
+
+type handler func(w http.ResponseWriter, r *http.Request, args []string) (int, error)
+
+func (app *App) wrapArgs(h handler, args []string) simplehttp.HandleFunc {
+	return func(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+		return h(w, r, args)
+	}
+}
+
 func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, int) {
+	u, err := parse(r.URL)
+	if err != nil {
+		return nil, http.StatusNotAcceptable
+	}
+	if u.raw != u.correct {
+		return func(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
+			w.Header().Set("Location", u.correct)
+			return http.StatusMovedPermanently, nil
+		}, 0
+	}
+
 	if app.prod && !strings.HasPrefix(r.RemoteAddr, "192.168.") {
 		buf := bytes.NewBuffer(make([]byte, 0, 255))
 		buf.WriteString("CONN[")
@@ -80,29 +129,34 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 		buf.WriteByte(10)
 		buf.WriteTo(os.Stdout)
 	}
-	p := strings.Trim(r.URL.Path, "/")
-	r.URL.Path = p
-
-	switch p {
-	case "":
-		return app.handleHome, 0
-	}
 
 	switch {
-	case strings.HasPrefix(p, "w/") && strings.Count(p, "/") == 1:
-		return app.ratelimit(app.handleWord), 0
-	case strings.HasPrefix(p, "w/i/") && strings.Count(p, "/") == 2:
-		return app.handleWordInfo, 0
-	case strings.HasPrefix(p, "a/") && strings.Count(p, "/") == 2:
-		return app.handleAudio, 0
-	case strings.HasPrefix(p, "aa/") && strings.Count(p, "/") == 2:
-		return app.handleArbitaryAudio, 0
-	case strings.HasPrefix(p, "i/") && strings.Count(p, "/") == 1:
-		return app.handleImg, 0
-	case strings.HasPrefix(p, "ai/") && strings.Count(p, "/") == 2:
-		return app.handleArbitaryImg, 0
-	case strings.HasPrefix(p, "f/") && strings.Count(p, "/") == 1:
-		return app.handleAsset, 0
+	case len(u.parts) == 0:
+		return app.wrapArgs(app.handleHome, u.parts), 0
+
+	case len(u.parts) == 2 && u.parts[0] == "scrape":
+		return app.wrapArgs(app.handleScrape, u.parts), 0
+
+	case len(u.parts) == 2 && u.parts[0] == "w":
+		return app.ratelimit(app.wrapArgs(app.handleWord, u.parts)), 0
+
+	case len(u.parts) == 3 && u.parts[0] == "w" && u.parts[1] == "i":
+		return app.wrapArgs(app.handleWordInfo, u.parts), 0
+
+	case len(u.parts) == 3 && u.parts[0] == "a":
+		return app.wrapArgs(app.handleAudio, u.parts), 0
+
+	case len(u.parts) == 3 && u.parts[0] == "aa":
+		return app.wrapArgs(app.handleArbitaryAudio, u.parts), 0
+
+	case len(u.parts) == 2 && u.parts[0] == "i":
+		return app.wrapArgs(app.handleImg, u.parts), 0
+
+	case len(u.parts) == 3 && u.parts[0] == "ai":
+		return app.wrapArgs(app.handleArbitaryImg, u.parts), 0
+
+	case len(u.parts) == 2 && u.parts[0] == "f":
+		return app.wrapArgs(app.handleAsset, u.parts), 0
 	}
 
 	return nil, 0
@@ -110,10 +164,17 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 
 var b64e = base64.NewEncoding(Base64Chars).WithPadding(base64.NoPadding)
 
-func absWord(w *openrussian.Word) string     { return fmt.Sprintf("/w/%s", w.Word) }
+func esc(i string) string                    { return url.PathEscape(i) } //url.QueryEscape(i) }
+func absWord(w *openrussian.Word) string     { return fmt.Sprintf("/w/%s", esc(w.Word)) }
 func absWordInfo(w *openrussian.Word) string { return fmt.Sprintf("/w/i/%d", w.ID) }
 func absImg(w *openrussian.Word) string      { return fmt.Sprintf("/i/%d.png", w.ID) }
-func absAudio(w *openrussian.Word) string    { return fmt.Sprintf("/a/%d/%s", w.ID, w.Word) }
+func absAudio(w *openrussian.Word) string    { return fmt.Sprintf("/a/%d/%s", w.ID, esc(w.Word)) }
+
+func hash(data string) string {
+	s1 := sha256.New()
+	s1.Write([]byte(data))
+	return base64.RawURLEncoding.EncodeToString(s1.Sum(nil))
+}
 
 func sign(data string) string {
 	s1 := sha256.New()
@@ -126,10 +187,13 @@ func sign(data string) string {
 	return b64e.EncodeToString(buf[32:])
 }
 
-func absArbitraryAudio(w string) string { return fmt.Sprintf("/aa/%s/%s", sign(w), w) }
-func absArbitraryImg(w string) string   { return fmt.Sprintf("/ai/%s/%s.png", sign(w), w) }
+func absArbitraryAudio(w string) string { return fmt.Sprintf("/aa/%s/%s", sign(w), esc(w)) }
+func absArbitraryImg(w string) string   { return fmt.Sprintf("/ai/%s/%s.png", sign(w), esc(w)) }
 
-func (app *App) cache(path string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
+func (app *App) cache(dir, name string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
+	hn := hash(name)
+	fulldir := filepath.Join(dir, hn[0:2], hn[2:4])
+	path := filepath.Join(fulldir, hn[4:])
 	f, err := os.Open(path)
 	if err == nil {
 		n, err := io.Copy(w, f)
@@ -138,6 +202,11 @@ func (app *App) cache(path string, w io.Writer, generate func(w io.Writer) (int6
 	}
 
 	if os.IsNotExist(err) {
+		app.rate <- struct{}{}
+		defer func() { <-app.rate }()
+		if _, err := os.Stat(fulldir); err != nil {
+			os.MkdirAll(fulldir, 0700)
+		}
 		tmp := fmt.Sprintf("%s.%d.tmp", path, time.Now().UnixNano())
 		f, err := os.Create(tmp)
 		if err != nil {
@@ -162,10 +231,9 @@ func (app *App) img(word *openrussian.Word, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	fp := filepath.Join(app.conf.ImageCacheDir, strconv.Itoa(int(word.ID)))
-	return app.cache(fp, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ImageCacheDir, strconv.Itoa(int(word.ID)), w, func(w io.Writer) (int64, error) {
 		str := word.Stressed.Parse().String()
-		img, err := image.Image(300, str, str, false, imgFG, imgBG)
+		img, err := image.Image(150, str, str, false, imgFG, imgBG)
 		if err != nil {
 			return 0, err
 		}
@@ -179,10 +247,8 @@ func (app *App) arbimg(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	fn := fmt.Sprintf("ai-%s", sign(word))
-	fp := filepath.Join(app.conf.ImageCacheDir, fn)
-	return app.cache(fp, w, func(w io.Writer) (int64, error) {
-		img, err := image.Image(150, "", word, false, imgFG, imgBG)
+	return app.cache(app.conf.ImageCacheDir, word, w, func(w io.Writer) (int64, error) {
+		img, err := image.Image(40, "", word, false, imgFG, imgBG)
 		if err != nil {
 			return 0, err
 		}
@@ -196,8 +262,7 @@ func (app *App) audio(word *openrussian.Word, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	fp := filepath.Join(app.conf.AudioCacheDir, strconv.Itoa(int(word.ID)))
-	return app.cache(fp, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.AudioCacheDir, strconv.Itoa(int(word.ID)), w, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word.Word)
 		res, err := http.Get(uri)
 		if err != nil {
@@ -213,9 +278,7 @@ func (app *App) arbaudio(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	fn := fmt.Sprintf("aa-%s", sign(word))
-	fp := filepath.Join(app.conf.AudioCacheDir, fn)
-	return app.cache(fp, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.AudioCacheDir, word, w, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word)
 		res, err := http.Get(uri)
 		if err != nil {
@@ -226,8 +289,68 @@ func (app *App) arbaudio(word string, w io.Writer) (int64, error) {
 	})
 }
 
-func (app *App) handleAsset(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 2)
+func (app *App) initScrapable() error {
+	if app.scrape.words != nil {
+		return nil
+	}
+	app.scrape.l.Lock()
+	defer app.scrape.l.Unlock()
+	if app.scrape.words != nil {
+		return nil
+	}
+	dict, err := common.GetDict()
+	if err != nil {
+		return err
+	}
+	mp := dict.Words()
+	l := make([]*openrussian.Word, 0, len(mp))
+	for _, w := range mp {
+		l = append(l, w)
+	}
+	app.scrape.words = l
+	return nil
+}
+
+func (app *App) handleHome(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
+	dict, err := common.GetDict()
+	if err != nil {
+		return 0, err
+	}
+	words := dict.Words()
+	d := WordPage{Query: "", Words: []*openrussian.Word{words[33002]}}
+
+	w.Header().Set("content-type", "text/html")
+	return 0, app.wordsTpl.Execute(w, d)
+}
+
+func (app *App) handleScrape(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
+	page, err := strconv.Atoi(p[1])
+	if err != nil || page < 0 {
+		return http.StatusNotFound, nil
+	}
+
+	if err := app.initScrapable(); err != nil {
+		return 0, err
+	}
+	const max = 50
+	offset := max * page
+	amount := max
+	if offset >= len(app.scrape.words) {
+		return http.StatusNotFound, nil
+	}
+
+	next := fmt.Sprintf("/scrape/%d", page+1)
+	if offset+amount >= len(app.scrape.words) {
+		amount = len(app.scrape.words) - offset
+		next = ""
+	}
+
+	words := app.scrape.words[offset : offset+amount]
+	w.Header().Set("content-type", "text/html")
+	return 0, app.scrapableTpl.Execute(w, WordPage{Words: words, Next: next})
+}
+
+func (app *App) handleAsset(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	h := w.Header()
 	switch p[1] {
 	case "n.png":
@@ -245,6 +368,11 @@ func (app *App) handleAsset(w http.ResponseWriter, r *http.Request, l *log.Logge
 		h.Set("cache-control", "max-age=86400")
 		w.Write(data.ImgM)
 		return 0, nil
+	case "pl.png":
+		h.Set("content-type", "image/png")
+		h.Set("cache-control", "max-age=86400")
+		w.Write(data.ImgPl)
+		return 0, nil
 	case "fav.png":
 		h.Set("content-type", "image/png")
 		h.Set("cache-control", "max-age=86400")
@@ -255,8 +383,7 @@ func (app *App) handleAsset(w http.ResponseWriter, r *http.Request, l *log.Logge
 	return http.StatusNotFound, nil
 }
 
-func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 3)
+func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	iID, err := strconv.Atoi(p[1])
 	if err != nil {
 		return http.StatusNotFound, nil
@@ -281,8 +408,7 @@ func (app *App) handleAudio(w http.ResponseWriter, r *http.Request, l *log.Logge
 	return 0, err
 }
 
-func (app *App) handleArbitaryAudio(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 3)
+func (app *App) handleArbitaryAudio(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	s := p[1]
 	rawstr := p[2]
 	if sign(rawstr) != s {
@@ -296,36 +422,7 @@ func (app *App) handleArbitaryAudio(w http.ResponseWriter, r *http.Request, l *l
 	return 0, err
 }
 
-func (app *App) handleHome(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	dict, err := common.GetDict()
-	if err != nil {
-		return 0, err
-	}
-	words := dict.Words()
-	d := WordPage{Query: "", Words: []*openrussian.Word{words[33002]}}
-
-	w.Header().Set("content-type", "text/html")
-	return 0, app.wordsTpl.Execute(w, d)
-
-	// w.Header().Set("content-type", "text/html")
-	// return 0, app.homeTpl.Execute(w, "GoRussian")
-
-	// dict, err := common.GetDict()
-	// if err != nil {
-	// 	return 0, err
-	// }
-
-	// w.Header().Set("content-type", "text/html")
-	// mp := dict.Words()
-	// words := make([]*openrussian.Word, 0, len(mp))
-	// for _, w := range mp {
-	// 	words = append(words, w)
-	// }
-	// return 0, app.scrapableTpl.Execute(w, WordPage{Words: words})
-}
-
-func (app *App) handleArbitaryImg(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 3)
+func (app *App) handleArbitaryImg(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	if !strings.HasSuffix(p[2], ".png") {
 		return http.StatusNotFound, nil
 	}
@@ -343,8 +440,7 @@ func (app *App) handleArbitaryImg(w http.ResponseWriter, r *http.Request, l *log
 	return 0, err
 }
 
-func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 2)
+func (app *App) handleImg(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	if !strings.HasSuffix(p[1], ".png") {
 		return http.StatusNotFound, nil
 	}
@@ -370,8 +466,7 @@ func (app *App) handleImg(w http.ResponseWriter, r *http.Request, l *log.Logger)
 	return 0, err
 }
 
-func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 2)
+func (app *App) handleWord(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	dct, err := common.GetDict()
 	if err != nil {
 		return 0, err
@@ -407,8 +502,7 @@ func (app *App) handleWord(w http.ResponseWriter, r *http.Request, l *log.Logger
 	return 0, app.wordsTpl.Execute(w, d)
 }
 
-func (app *App) handleWordInfo(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-	p := strings.SplitN(r.URL.Path, "/", 3)
+func (app *App) handleWordInfo(w http.ResponseWriter, r *http.Request, p []string) (int, error) {
 	id, err := strconv.Atoi(p[2])
 	if err != nil {
 		return http.StatusNotFound, nil
@@ -432,6 +526,7 @@ type WordPage struct {
 	Query string
 	Edits dict.Edits
 	Audio string
+	Next  string
 	Words []*openrussian.Word
 }
 
@@ -460,8 +555,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	nonl := func(i string) string { return strings.ReplaceAll(strings.ReplaceAll(i, "\n", ""), "\t", "") }
 
 	tpl := template.Must(mtpl.Funcs(template.FuncMap{
 		"editType": func(t dict.EditType) string {
@@ -501,233 +594,7 @@ func main() {
 
 			return fmt.Sprintf("/f/%s.png", gender.(string))
 		},
-	}).Parse(nonl(`{{- define "trans" -}}
-<div>{{ .Translation }}</div>
-{{- if .Info }}<div>{{ .Info }}</div>{{ end -}}
-{{- if .Example -}}
-<div>
-	<p>{{ .Example -}}</p>
-	{{ if .ExampleTranslation }}<p>{{ .ExampleTranslation}}</p>{{ end -}}
-</div>
-{{- end -}}
-{{- end -}}
-
-{{- define "gender" -}}{{ with genderImg . }}<img class="gender" src="{{ . }}"/>{{ end }}{{- end -}}
-
-{{- define "arb-img" -}}
-<td class="img-container">
-{{- if . -}}
-<a class="img" href="#"><img src="{{ absArbitraryImg .String }}"/></a>
-<audio controls>
-<source src="{{ absArbitraryAudio .Unstressed }}" type="audio/mpeg">
-</audio>
-{{- end -}}
-</td>
-{{- end -}}
-
-{{- define "arb-img-word" -}}
-<td class="img-container">{{ if . }}{{ if .Stressed }}{{- template "arb-img" .Stressed -}}{{ end }}{{ end }}</td>
-{{- end -}}
-
-{{- define "word-info" -}}
-<div class="meta">
-{{- with .AdjInfo -}}
-	<table class="adj">
-		{{- with .Comparative -}}
-		<tr><td>Comparative</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>
-		{{- end -}}
-		{{- with .Superlative -}}
-		<tr><td>Superlative</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>
-		{{- end -}}
-		<tr><td></td><td></td></tr>
-		{{ with .F }}{{ template "adj-gender-info" . }}{{ end -}}
-		<tr><td></td><td></td></tr>
-		{{ with .M }}{{ template "adj-gender-info" . }}{{ end -}}
-		<tr><td></td><td></td></tr>
-		{{ with .N }}{{ template "adj-gender-info" . }}{{ end -}}
-		<tr><td></td><td></td></tr>
-		{{ with .Pl }}{{ template "adj-gender-info" . }}{{ end -}}
-	</table>
-{{- end -}}
-{{- with .VerbInfo -}}
-	<table class="verb">
-	{{- with .Conjugation -}}
-		<tr><td>я</td><td>{{ .Sg1.Unstressed }}</td>{{ template "arb-img" .Sg1 }}</td>
-		<tr><td>ты</td><td>{{ .Sg2.Unstressed }}</td>{{ template "arb-img" .Sg2 }}</td>
-		<tr><td>он/она/оно</td><td>{{ .Sg3.Unstressed }}</td>{{ template "arb-img" .Sg3 }}</td>
-		<tr><td>мы</td><td>{{ .Pl1.Unstressed }}</td>{{ template "arb-img" .Pl1 }}</td>
-		<tr><td>вы</td><td>{{ .Pl2.Unstressed }}</td>{{ template "arb-img" .Pl2 }}</td>
-		<tr><td>они</td><td>{{ .Pl3.Unstressed }}</td>{{ template "arb-img" .Pl3 }}</td>
-		<tr><td></td><td></td></tr>
-	{{ end -}}
-		<tr><td>Aspect</td><td>{{ .Aspect }}</td></tr>
-		{{- with .ImperativeSg }}<tr><td>Imperative (singular)</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		{{- with .ImperativePl }}<tr><td>Imperative (plural)</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		<tr><td></td><td></td></tr>
-		{{- with .PastF }}<tr><td>past {{ template "gender" "f" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		{{- with .PastM }}<tr><td>past {{ template "gender" "m" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		{{- with .PastN }}<tr><td>past {{ template "gender" "n" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		{{- with .PastPl }}<tr><td>past {{ template "gender" "pl" }}</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-		<tr><td></td><td></td></tr>
-		<tr><td>Active present</td><td>{{ with .ActivePresent }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .ActivePresent }}</tr>
-		<tr><td>Active past</td><td>{{ with .ActivePast }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .ActivePast }}</tr>
-		<tr><td>Passive present</td><td>{{ with .PassivePresent }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .PassivePresent }}</tr>
-		<tr><td>Passive past</td><td>{{ with .PassivePast }}{{ .Word }}{{ else }}/{{ end }}</td>{{ template "arb-img-word" .PassivePast }}</tr>
-		<tr><td></td><td></td></tr>
-	</table>
-{{- end -}}
-</div>
-{{- end -}}
-
-{{- define "adj-gender-info" -}}
-<tr><td class="title">{{ template "gender" .Gender }}</td><td></td></tr>
-{{- with .Short }}<tr><td>stem</td><td>{{ .Unstressed }}</td></tr>{{ end -}}
-{{- with .Decl -}}
-	{{- with .Nom }}<tr><td>nom</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-	{{- with .Gen }}<tr><td>gen</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-	{{- with .Dat }}<tr><td>dat</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-	{{- with .Acc }}<tr><td>acc</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-	{{- with .Inst }}<tr><td>inst</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-	{{- with .Prep }}<tr><td>prep</td><td>{{ .Unstressed }}</td>{{ template "arb-img" . }}</tr>{{ end -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "word" -}}
-<td class="smol">
-{{- if or .AdjInfo .VerbInfo -}}
-<a href="{{ absWordInfo . }}">{{- template "wordStr" . -}}</a>
-{{- else -}}
-{{- template "wordStr" . -}}
-{{- end -}}
-<div class="scrape">
-<a href="{{ absImg . }}">img</a>
-<a href="{{ absAudio . }}">audio</a>
-</div>
-<audio controls>
-<source src="{{ absAudio . }}" type="audio/mpeg">
-</audio>
-</td>
-<td class="img-container"><a class="img" href="#"><img src="{{ absImg . }}"/></a></td>
-<td class="smol">
-{{- if .NounInfo }} {{ template "gender" .NounInfo.Gender }}{{ end -}}
-</td>
-<td class="smol">
-{{- .WordType -}}
-</td>
-<td class="smol">
-{{- if .DerivedFrom }}<a href="{{ absWord .DerivedFrom }}">{{ .DerivedFrom.Word }}</a>{{ end -}}
-</td>
-<td>
-<ul>
-{{- range .Translations -}}
-<li>{{ template "trans" . }}</li>
-{{- end -}}
-</ul>
-</td>
-<td class="smollish">
-<a class="c-normal copy" href="#">copy</a>
-{{- if ne .Word .Stressed -}}
-<a class="c-stressed copy" href="#">copy stressed</a>
-{{- end -}}
-</td>
-{{- end -}}
-
-{{- define "wordStr" -}}
-<span class="normal">{{ unstressed . }}</span><span class="stressed">{{ stressednc . }}</span><br/>
-{{- end -}}
-
-{{- define "header" -}}
-<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="utf-8">
-	<title>{{ . }}</title>
-	<link rel="shortcut icon" type="image/png" href="/f/fav.png"/>
-	<style>
-		*                      { padding: 0; margin: 0; box-sizing: border-box; }
-		html, body             { background-color: #151515; color: #fff; }
-		main                   { max-width: 1400px; width: 95%; margin: 0 auto 50px auto; margin-top: 20px; }
-		img.gender             { width: 25px; height: auto; }
-		.stressed              { display: none; }
-		.copy                  { display: block; transition: color 500ms; }
-		.copy.copied           { color: #afa; }
-		.copy.error            { color: #faa; }
-		.main-table            { width: 100%; }
-		.results               { margin-top: 40px; }
-		td                     { padding: 20px; width: 20%; }
-		td.smol                { width: 5%; }
-		td.smollish            { width: 10%; }
-		td.img-container       { text-align: center; }
-		img                    { height: 150px; width: auto; }
-		audio                  { display: none; }
-		a                      { color: #ccc; text-decoration: underline; }
-		.scrape                { display: none; }
-		form                   { position: relative; }
-		form input             { min-height: 2em; font-size: 2em; background-color: #333; color: #fff; outline: none; border: 1px solid #ccc; padding: 20px; width: 89%; }
-		form .submit           { position: absolute; top: 0; right: 0; width: 10%; margin-left: 1%; }
-		.edits                 { font-size: 2em; display: inline-block; width: auto; border: 3px #800 solid; padding: 2px 1em; }
-		.edit                  { padding: 5px 0; }
-		.edit.h                { display: none; }
-		.edit.a                { background-color: #800; color: #800; }
-		.edit.d,
-		.edit.c                { background-color: #800; color: #fff; }
-		.meta                  { margin-left: 20px; }
-		.meta table            { margin-top: 2em;  }
-		.meta .gender          { width: 16px; }
-		.meta td:first-child   {  }
-		.meta td               { width: auto; height: 2em; padding: 0 20px 0 0; }
-		.meta td.img-container img { max-height: 150%; width: auto; }
-		img                    { image-rendering: crisp-edges; }
-		}
-	</style>
-</head>
-<body>
-<main>
-{{- end -}}
-
-{{- define "footer" -}}
-</main>
-</body>
-</html>
-{{- end -}}
-
-{{- define "results" -}}
-{{- with .Edits -}}
-<div class="edits"/>
-{{- range . -}}
-<span class="edit {{ editType .Type }}">{{ . }}</span>
-{{- end -}}
-</div>
-{{- end -}}
-{{- if .Words -}}
-<table class="main-table">
-{{- range .Words -}}
-<tr>{{ template "word" . }}</tr>
-{{- end -}}
-</table>
-{{- else -}}
-No results
-{{- end -}}
-{{- end -}}
-
-{{- define "main" -}}
-<div class="input">
-<form>
-<input type="text"   class="val"    value="{{ .Query }}" placeholder="Слово | Word" />
-<input type="submit" class="submit" value=">"                                       />
-</form>
-</div>
-<div class="results">
-{{- template "results" . -}}
-</div>
-{{- end -}}
-
-{{- define "js" -}}<script>`) + data.AppJS + nonl(`</script>{{- end -}}
-{{- template "header" "GoRussian" -}}
-{{- template "main" . -}}
-{{- template "js" -}}
-{{- template "footer" }}`),
-	))
+	}).Parse(mainTpl))
 
 	homeTpl := template.Must(tpl.New("home").Parse(`
 {{- template "header" . -}}
@@ -735,9 +602,12 @@ No results
 {{- template "footer" }}`))
 
 	scrapableTpl := template.Must(template.Must(tpl.Clone()).Parse(`
-{{- define "word" -}}
-<a href="{{ absWord . }}">w</a>
-{{- end -}}`))
+{{- template "header" . -}}
+{{- range .Words -}}
+<a href="{{ absWord . }}">{{ .Word }}</a><br/>
+{{- end -}}
+{{- with .Next }}<a href="{{ . }}">next</a>{{ end -}}
+{{- template "footer" -}}`))
 
 	errTpl := template.Must(tpl.New("err").Parse(`
 {{- template "header" "Error" -}}
@@ -761,7 +631,7 @@ No results
 
 	app := &App{
 		prod: Prod,
-		rate: make(chan struct{}, 3),
+		rate: make(chan struct{}, 100000),
 		conf: Config{
 			AudioCacheDir: audioCacheDir,
 			ImageCacheDir: imgCacheDir,
@@ -772,7 +642,14 @@ No results
 		scrapableTpl: scrapableTpl,
 		resultsTpl:   resultsTpl,
 	}
+
+	// build our own mux since https://github.com/golang/go/issues/21955
+	// is a ridiculous issue that should have been fixed in 2017...
 	s := tls.New(app.route, l)
+	var omux http.Handler
+	_, omux = s.OverrideMux(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		omux.ServeHTTP(w, r)
+	}))
 
 	buf := bytes.NewBuffer(nil)
 	for i := 300; i <= 500; i++ {

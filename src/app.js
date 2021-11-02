@@ -83,11 +83,15 @@ form.onsubmit = function (e) {
 };
 
 let results = document.getElementsByClassName('results')[0];
+let meta = document.getElementsByClassName('meta');
 let lastFetch = inpWord();
 let fetchWord = function () {
     let w = inpWord();
     if (w === '' || w === lastFetch) {
         return;
+    }
+    if (meta && meta.length) {
+        meta[0].innerHTML = '';
     }
 
     lastFetch = w;

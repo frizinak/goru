@@ -328,12 +328,12 @@ func DecodeVerbs(r io.Reader) (CSVVerbs, error) {
 		verb.Aspect = aspect(row[1])
 
 		verb.Partner = SplitStressed(row[2])
-		verb.ImperativeSg = Stressed(row[3])
-		verb.ImperativePl = Stressed(row[4])
-		verb.PastM = Stressed(row[5])
-		verb.PastF = Stressed(row[6])
-		verb.PastN = Stressed(row[7])
-		verb.PastPl = Stressed(row[8])
+		verb.ImperativeSg = Stressed(strings.TrimSpace(row[3]))
+		verb.ImperativePl = Stressed(strings.TrimSpace(row[4]))
+		verb.PastM = Stressed(strings.TrimSpace(row[5]))
+		verb.PastF = Stressed(strings.TrimSpace(row[6]))
+		verb.PastN = Stressed(strings.TrimSpace(row[7]))
+		verb.PastPl = Stressed(strings.TrimSpace(row[8]))
 
 		verb.Conjugation = ids[0]
 		verb.ActivePresentWord = ids[1]

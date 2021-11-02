@@ -45,7 +45,8 @@ type Config struct {
 
 type App struct {
 	prod         bool
-	rate         chan struct{}
+	cpurate      chan struct{}
+	netrate      chan struct{}
 	conf         Config
 	homeTpl      *template.Template
 	wordsTpl     *template.Template
@@ -60,10 +61,14 @@ type App struct {
 }
 
 func (app *App) ratelimit(h simplehttp.HandleFunc) simplehttp.HandleFunc {
+	if app.cpurate == nil {
+		return h
+	}
+
 	return func(w http.ResponseWriter, r *http.Request, l *log.Logger) (int, error) {
-		app.rate <- struct{}{}
+		app.cpurate <- struct{}{}
 		n, err := h(w, r, l)
-		<-app.rate
+		<-app.cpurate
 		return n, err
 	}
 }
@@ -167,7 +172,7 @@ func (app *App) route(r *http.Request, l *log.Logger) (simplehttp.HandleFunc, in
 
 var b64e = base64.NewEncoding(Base64Chars).WithPadding(base64.NoPadding)
 
-func esc(i string) string                    { return url.PathEscape(i) } //url.QueryEscape(i) }
+func esc(i string) string                    { return url.PathEscape(i) }
 func absWord(w *openrussian.Word) string     { return fmt.Sprintf("/w/%s", esc(w.Word)) }
 func absWordInfo(w *openrussian.Word) string { return fmt.Sprintf("/w/i/%d", w.ID) }
 func absImg(w *openrussian.Word) string      { return fmt.Sprintf("/i/%d.png", w.ID) }
@@ -193,7 +198,7 @@ func sign(data string) string {
 func absArbitraryAudio(w string) string { return fmt.Sprintf("/aa/%s/%s", sign(w), esc(w)) }
 func absArbitraryImg(w string) string   { return fmt.Sprintf("/ai/%s/%s.png", sign(w), esc(w)) }
 
-func (app *App) cache(dir, name string, w io.Writer, generate func(w io.Writer) (int64, error)) (int64, error) {
+func (app *App) cache(dir, name string, w io.Writer, rate chan struct{}, generate func(w io.Writer) (int64, error)) (int64, error) {
 	hn := fnhash(name)
 	fulldir := filepath.Join(dir, hn[0:2], hn[2:4])
 	path := filepath.Join(fulldir, hn[4:])
@@ -205,8 +210,10 @@ func (app *App) cache(dir, name string, w io.Writer, generate func(w io.Writer) 
 	}
 
 	if os.IsNotExist(err) {
-		app.rate <- struct{}{}
-		defer func() { <-app.rate }()
+		if rate != nil {
+			rate <- struct{}{}
+			defer func() { <-rate }()
+		}
 		if _, err := os.Stat(fulldir); err != nil {
 			os.MkdirAll(fulldir, 0700)
 		}
@@ -234,7 +241,7 @@ func (app *App) img(word *openrussian.Word, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.ImageCacheDir, strconv.Itoa(int(word.ID)), w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ImageCacheDir, strconv.Itoa(int(word.ID)), w, app.cpurate, func(w io.Writer) (int64, error) {
 		str := word.Stressed.Parse().String()
 		img, err := image.Image(150, str, str, false, imgFG, imgBG)
 		if err != nil {
@@ -250,7 +257,7 @@ func (app *App) arbimg(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.ArbitraryImageCacheDir, word, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ArbitraryImageCacheDir, word, w, app.cpurate, func(w io.Writer) (int64, error) {
 		img, err := image.Image(40, "", word, false, imgFG, imgBG)
 		if err != nil {
 			return 0, err
@@ -265,7 +272,7 @@ func (app *App) audio(word *openrussian.Word, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.AudioCacheDir, strconv.Itoa(int(word.ID)), w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.AudioCacheDir, strconv.Itoa(int(word.ID)), w, app.netrate, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word.Word)
 		res, err := http.Get(uri)
 		if err != nil {
@@ -281,7 +288,7 @@ func (app *App) arbaudio(word string, w io.Writer) (int64, error) {
 		return 0, errors.New("nil word")
 	}
 
-	return app.cache(app.conf.ArbitraryAudioCacheDir, word, w, func(w io.Writer) (int64, error) {
+	return app.cache(app.conf.ArbitraryAudioCacheDir, word, w, app.netrate, func(w io.Writer) (int64, error) {
 		uri := fmt.Sprintf("https://api.openrussian.org/read/ru/%s", word)
 		res, err := http.Get(uri)
 		if err != nil {
@@ -638,7 +645,8 @@ func main() {
 
 	app := &App{
 		prod: Prod,
-		rate: make(chan struct{}, 3),
+		// cpurate: make(chan struct{}, 3),
+		// netrate: make(chan struct{}, 3),
 		conf: Config{
 			AudioCacheDir:          audioCacheDir,
 			ImageCacheDir:          imgCacheDir,

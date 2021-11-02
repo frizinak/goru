@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"time"
 
+	"github.com/coreos/go-systemd/activation"
 	"github.com/frizinak/gotls/tls"
 )
 
@@ -37,9 +38,14 @@ func domainKey() *ecdsa.PrivateKey {
 }
 
 func run(s *tls.Server, addr string) error {
+	listeners := []interface{}{HTTPAddr, HTTPSAddr}
+	_listeners, _ := activation.Listeners()
+	for i := range _listeners {
+		listeners[i] = _listeners[i]
+	}
 	return s.StartCertified(
-		HTTPSAddr,
-		HTTPAddr,
+		listeners[1],
+		listeners[0],
 		ACMEDir,
 		Domains,
 		Contact,

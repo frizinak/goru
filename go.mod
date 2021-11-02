@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
 	github.com/tdewolff/parse/v2 v2.5.21 // indirect
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
